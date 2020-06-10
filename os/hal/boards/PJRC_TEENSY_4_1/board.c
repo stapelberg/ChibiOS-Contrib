@@ -208,6 +208,10 @@ void __early_init(void) {
   MIMXRT1062_clock_init();
 }
 
+void __late_init(void) {
+  MIMXRT1062_late_init();
+}
+
 /**
  * @brief   Board-specific initialization code.
  * @todo    Add your board-specific code, if any.

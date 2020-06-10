@@ -63,7 +63,7 @@
 /*===========================================================================*/
 /* Driver pre-compile time settings.                                         */
 /*===========================================================================*/
-
+#if 0
 /**
  * @name    Configuration options
  * @{
@@ -261,6 +261,7 @@
 #error Invalid KINETIS_MCG_FLL_DRS value, must be 0...3
 #endif
 
+#endif
 /*===========================================================================*/
 /* Driver data structures and types.                                         */
 /*===========================================================================*/
@@ -312,7 +313,8 @@ typedef uint32_t halrtcnt_t;
 extern "C" {
 #endif
   void hal_lld_init(void);
-  void MK66F18_clock_init(void);
+  void MIMXRT1062_clock_init(void);
+  void MIMXRT1062_late_init(void);
 #ifdef __cplusplus
 }
 #endif

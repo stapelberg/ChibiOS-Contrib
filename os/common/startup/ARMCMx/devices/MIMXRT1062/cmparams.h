@@ -60,6 +60,9 @@
  */
 #define CORTEX_NUM_VECTORS      160
 
+/* Disable any RAM copying in crt1 for now. */
+#define CRT1_AREAS_NUMBER 0
+
 /* The following code is not processed when the file is included from an
    asm module.*/
 #if !defined(_FROM_ASM_)
