@@ -52,15 +52,16 @@ int main(void) {
   /*
    * Activates serial 1 (UART0) using the driver default configuration.
    */
-  sdStart(&SD1, NULL);
+  sdStart(&SD4, NULL);
+  sdWrite(&SD4, (unsigned char*)"Hello world!\r\n", strlen("Hello world!\r\n"));
 
   /*
    * Creates the blinker thread.
    */
   chThdCreateStatic(waThread1, sizeof(waThread1), NORMALPRIO, Thread1, NULL);
 
-  test_execute((BaseSequentialStream *)&SD1, &rt_test_suite);
-  test_execute((BaseSequentialStream *)&SD1, &oslib_test_suite);
+  test_execute((BaseSequentialStream *)&SD4, &rt_test_suite);
+  test_execute((BaseSequentialStream *)&SD4, &oslib_test_suite);
   while (true) {
       chThdSleepMilliseconds(1000);
   }
