@@ -26,6 +26,11 @@
 #include "osal.h"
 #include "hal.h"
 
+#define printf_init()
+#define printf(...)
+#define printf_debug_init()
+#define printf_debug(...)
+
 #if HAL_USE_SERIAL || defined(__DOXYGEN__)
 
 /*===========================================================================*/
@@ -39,27 +44,27 @@
 /**
  * @brief   SD1 driver identifier.
  */
-#if KINETIS_SERIAL_USE_UART0 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART0 || defined(__DOXYGEN__)
 SerialDriver SD1;
 #endif
 
-#if KINETIS_SERIAL_USE_UART1 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART1 || defined(__DOXYGEN__)
 SerialDriver SD2;
 #endif
 
-#if KINETIS_SERIAL_USE_UART2 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART2 || defined(__DOXYGEN__)
 SerialDriver SD3;
 #endif
 
-#if KINETIS_SERIAL_USE_UART3 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART3 || defined(__DOXYGEN__)
 SerialDriver SD4;
 #endif
 
-#if KINETIS_SERIAL_USE_UART4 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART4 || defined(__DOXYGEN__)
 SerialDriver SD5;
 #endif
 
-#if KINETIS_SERIAL_USE_UART5 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART5 || defined(__DOXYGEN__)
 SerialDriver SD6;
 #endif
 
@@ -71,7 +76,7 @@ SerialDriver SD6;
  * @brief   Driver default configuration.
  */
 static const SerialConfig default_config = {
-  38400
+  SERIAL_DEFAULT_BITRATE
 };
 
 /*===========================================================================*/
@@ -86,13 +91,13 @@ static const SerialConfig default_config = {
 static void set_error(SerialDriver *sdp, uint8_t s1) {
   eventflags_t sts = 0;
 
-  if (s1 & UARTx_S1_OR)
+  if (s1 & LPUART_STAT_OR_MASK)
     sts |= SD_OVERRUN_ERROR;
-  if (s1 & UARTx_S1_PF)
+  if (s1 & LPUART_STAT_PF_MASK)
     sts |= SD_PARITY_ERROR;
-  if (s1 & UARTx_S1_FE)
+  if (s1 & LPUART_STAT_FE_MASK)
     sts |= SD_FRAMING_ERROR;
-  if (s1 & UARTx_S1_NF)
+  if (s1 & LPUART_STAT_NF_MASK)
     sts |= SD_NOISE_ERROR;
   osalSysLockFromISR();
   chnAddFlagsI(sdp, sts);
@@ -106,39 +111,17 @@ static void set_error(SerialDriver *sdp, uint8_t s1) {
  */
 static void serve_error_interrupt(SerialDriver *sdp) {
   UART_w_TypeDef *u = &(sdp->uart);
-  uint8_t s1 = *(u->s1_p);
+  uint8_t s1 = u->lpuart_p->STAT;
 
-  /* Clearing on K20x, K60x, and KL2x/UART>0 is done by reading S1 and
-   * then reading D.*/
-
-  if(s1 & UARTx_S1_IDLE) {
-    (void)*(u->d_p);
+  if(s1 & LPUART_STAT_IDLE_MASK) {
+    (void)u->lpuart_p->DATA; // TODO: is that how to clear on the MIMXRT1062?
   }
 
-  if(s1 & (UARTx_S1_OR | UARTx_S1_NF | UARTx_S1_FE | UARTx_S1_PF)) {
+  if(s1 & (LPUART_STAT_OR_MASK | LPUART_STAT_NF_MASK | LPUART_STAT_FE_MASK | LPUART_STAT_PF_MASK)) {
     set_error(sdp, s1);
-    (void)*(u->d_p);
+    (void)u->lpuart_p->DATA; // TODO: is that how to clear on the MIMXRT1062?
   }
 }
-
-#if defined(KL2x) && KINETIS_SERIAL_USE_UART0
-static void serve_error_interrupt_uart0(void) {
-  SerialDriver *sdp = &SD1;
-  UART_w_TypeDef *u = &(sdp->uart);
-  uint8_t s1 = *(u->s1_p);
-
-  /* S1 bits are write-1-to-clear for UART0 on KL2x. */
-
-  if(s1 & UARTx_S1_IDLE) {
-    *(u->s1_p) |= UARTx_S1_IDLE;
-  }
-
-  if(s1 & (UARTx_S1_OR | UARTx_S1_NF | UARTx_S1_FE | UARTx_S1_PF)) {
-    set_error(sdp, s1);
-    *(u->s1_p) |= UARTx_S1_OR | UARTx_S1_NF | UARTx_S1_FE | UARTx_S1_PF;
-  }
-}
-#endif /* KL2x && KINETIS_SERIAL_USE_UART0 */
 
 /**
  * @brief   Common IRQ handler.
@@ -150,18 +133,18 @@ static void serve_error_interrupt_uart0(void) {
  */
 static void serve_interrupt(SerialDriver *sdp) {
   UART_w_TypeDef *u = &(sdp->uart);
-  uint8_t s1 = *(u->s1_p);
+  uint8_t s1 = u->lpuart_p->STAT;
 
-  if (s1 & UARTx_S1_RDRF) {
+  if (s1 & LPUART_STAT_RDRF_MASK) {
     osalSysLockFromISR();
     if (iqIsEmptyI(&sdp->iqueue))
       chnAddFlagsI(sdp, CHN_INPUT_AVAILABLE);
-    if (iqPutI(&sdp->iqueue, *(u->d_p)) < Q_OK)
+    if (iqPutI(&sdp->iqueue, u->lpuart_p->DATA) < Q_OK)
       chnAddFlagsI(sdp, SD_OVERRUN_ERROR);
     osalSysUnlockFromISR();
   }
 
-  if (s1 & UARTx_S1_TDRE) {
+  if (s1 & LPUART_STAT_TDRE_MASK) {
     msg_t b;
 
     osalSysLockFromISR();
@@ -172,52 +155,69 @@ static void serve_interrupt(SerialDriver *sdp) {
       osalSysLockFromISR();
       chnAddFlagsI(sdp, CHN_OUTPUT_EMPTY);
       osalSysUnlockFromISR();
-      *(u->c2_p) &= ~UARTx_C2_TIE;
+      // Disable Transfer Interrupt
+      u->lpuart_p->CTRL &= ~LPUART_CTRL_TIE_MASK;
     } else {
-       *(u->d_p) = b;
+      u->lpuart_p->DATA = b;
+      // Ensure all data in the transmit buffer is sent out to bus. As per
+      // SDK_2.7.0_EVK-MIMXRT1060/devices/MIMXRT1062/drivers/fsl_lpuart.c:
+      while ((u->lpuart_p->STAT & LPUART_STAT_TC_MASK) == 0) {}
     }
   }
 
-#if defined(KL2x) && KINETIS_SERIAL_USE_UART0
-  if (sdp == &SD1) {
-    serve_error_interrupt_uart0();
-    return;
-  }
-#endif
   serve_error_interrupt(sdp);
 }
 
+#if 0
 /**
  * @brief   Attempts a TX preload
  */
 static void preload(SerialDriver *sdp) {
   UART_w_TypeDef *u = &(sdp->uart);
+  uint8_t s1 = u->lpuart_p->STAT;
 
-  if (*(u->s1_p) & UARTx_S1_TDRE) {
+  if (s1 & LPUART_STAT_TDRE_MASK) {
     msg_t b = oqGetI(&sdp->oqueue);
     if (b < Q_OK) {
       chnAddFlagsI(sdp, CHN_OUTPUT_EMPTY);
       return;
     }
-    *(u->d_p) = b;
-    *(u->c2_p) |= UARTx_C2_TIE;
+    u->lpuart_p->DATA = b;
+    u->lpuart_p->CTRL |= LPUART_CTRL_TIE(1);
   }
 }
+#endif
 
 /**
  * @brief   Driver output notification.
  */
 static void notify(io_queue_t *qp)
 {
-  preload(qp->q_link);
+  SerialDriver *sdp = qp->q_link;
+  UART_w_TypeDef *u = &(sdp->uart);
+
+  //printf_debug("notify()\n");
+  //preload(qp->q_link);
+
+  // TODO: figure out why the interrupt code path does not work
+  // Blockingly drain the queue into the serial buffer:
+  for (;;) {
+    msg_t b = oqGetI(&sdp->oqueue);
+    if (b < Q_OK) {
+      return;
+    }
+    while (!(u->lpuart_p->STAT & LPUART_STAT_TDRE_MASK)) ; // wait
+    u->lpuart_p->DATA = b;
+  }
 }
 
 /**
  * @brief   Common driver initialization, except LP.
  */
-static void sd_lld_init_driver(SerialDriver *SDn, UART_TypeDef *UARTn) {
+static void sd_lld_init_driver(SerialDriver *SDn, LPUART_Type *UARTn) {
   /* Driver initialization.*/
   sdObjectInit(SDn, NULL, notify);
+#if 0
   SDn->uart.bdh_p = &(UARTn->BDH);
   SDn->uart.bdl_p = &(UARTn->BDL);
   SDn->uart.c1_p =  &(UARTn->C1);
@@ -228,6 +228,8 @@ static void sd_lld_init_driver(SerialDriver *SDn, UART_TypeDef *UARTn) {
   SDn->uart.s2_p =  &(UARTn->S2);
   SDn->uart.d_p =   &(UARTn->D);
   SDn->uart.uart_p = UARTn;
+#endif
+  (void)UARTn;
 }
 
 /**
@@ -235,24 +237,38 @@ static void sd_lld_init_driver(SerialDriver *SDn, UART_TypeDef *UARTn) {
  *
  */
 static void configure_uart(SerialDriver *sdp, const SerialConfig *config) {
-
   UART_w_TypeDef *uart = &(sdp->uart);
+
+#if 1 /* DEBUG */
+  printf_debug("before CTRL write\n");
+  uart->lpuart_p->CTRL = 
+    LPUART_CTRL_ORIE(1) | /* overrun interrupt enable */
+    LPUART_CTRL_NEIE(1) | /* Noise Error Interrupt Enable */
+    LPUART_CTRL_FEIE(1) | /* Framing Error Interrupt Enable */
+    LPUART_CTRL_PEIE(1) | /* Parity Error Interrupt Enable */
+    LPUART_CTRL_RE(1) | /* Receiver Enable */
+    LPUART_CTRL_RIE(1) | /* Receiver Interrupt Enable */
+    LPUART_CTRL_TE(1); /* Transmitter Enable */
+  printf_debug("after CTRL write\n");
+  return;
+#endif /* DEBUG */
+
   uint32_t divisor;
 
   /* Discard any incoming data. */
-  while (*(uart->s1_p) & UARTx_S1_RDRF) {
-    (void)*(uart->d_p);
+  while (uart->lpuart_p->STAT & LPUART_STAT_RDRF_MASK) {
+    (void)uart->lpuart_p->DATA; // TODO: is this how clearing works?
   }
 
   /* Disable UART while configuring */
-  *(uart->c2_p) &= ~(UARTx_C2_RE | UARTx_C2_TE);
+  uart->lpuart_p->CTRL &= ~(LPUART_CTRL_RE_MASK | LPUART_CTRL_TE_MASK);
 
   /* The clock sources for various UARTs can be different. */
   divisor=KINETIS_BUSCLK_FREQUENCY;
 
 #if defined(KL2x)
 
-#if KINETIS_SERIAL_USE_UART0
+#if MIMXRT1062_SERIAL_USE_UART0
   if (sdp == &SD1) {
     /* UART0 can be clocked from several sources on KL2x. */
     divisor = KINETIS_UART0_CLOCK_FREQ;
@@ -260,45 +276,56 @@ static void configure_uart(SerialDriver *sdp, const SerialConfig *config) {
     /* Note: OSR only works on KL2x/UART0; further UARTs have fixed 16. */
     *(uart->c4_p) = UARTx_C4_OSR(16 - 1);
   }
-#endif /* KINETIS_SERIAL_USE_UART0 */
+#endif /* MIMXRT1062_SERIAL_USE_UART0 */
 
 #elif defined(K20x) || defined(K60x) || defined(MK66F18) /* KL2x */
 
   /* UARTs 0 and 1 are clocked from SYSCLK, others from BUSCLK on K20x and K60x. */
-#if KINETIS_SERIAL_USE_UART0
+#if MIMXRT1062_SERIAL_USE_UART0
   if(sdp == &SD1)
     divisor = KINETIS_SYSCLK_FREQUENCY;
-#endif /* KINETIS_SERIAL_USE_UART0 */
-#if KINETIS_SERIAL_USE_UART1
+#endif /* MIMXRT1062_SERIAL_USE_UART0 */
+#if MIMXRT1062_SERIAL_USE_UART1
   if(sdp == &SD2)
     divisor = KINETIS_SYSCLK_FREQUENCY;
-#endif /* KINETIS_SERIAL_USE_UART1 */
+#endif /* MIMXRT1062_SERIAL_USE_UART1 */
 
 #else /* K20x */
-#error Baud rate selection not implemented for this MCU type
+
+  // TODO: currently hardcoded to 115200
+  uart->lpuart_p->BAUD = LPUART_BAUD_OSR(25) | LPUART_BAUD_SBR(8); // ~115200 baud
+  
 #endif /* K20x */
 
   divisor = (divisor * 2 + 1) / config->sc_speed;
 
+  #if 0
   *(uart->bdh_p) = UARTx_BDH_SBR(divisor >> 13) | (*(uart->bdh_p) & ~UARTx_BDH_SBR_MASK);
   *(uart->bdl_p) = UARTx_BDL_SBR(divisor >> 5);
 #if defined(K20x) || defined(K60x)
   *(uart->c4_p) = UARTx_C4_BRFA(divisor) | (*(uart->c4_p) & ~UARTx_C4_BRFA_MASK);
 #endif /* K20x, K60x */
+  #endif
 
-  /* Line settings. */
-  *(uart->c1_p) = 0;
+
+
   /* Enable error event interrupts (overrun, noise, framing, parity) */
-  *(uart->c3_p) = UARTx_C3_ORIE | UARTx_C3_NEIE | UARTx_C3_FEIE | UARTx_C3_PEIE;
+  uart->lpuart_p->CTRL = 
+    LPUART_CTRL_ORIE(1) |
+    LPUART_CTRL_NEIE(1) |
+    LPUART_CTRL_FEIE(1) |
+    LPUART_CTRL_PEIE(1) |
   /* Enable the peripheral; including receive interrupts. */
-  *(uart->c2_p) |= UARTx_C2_RE | UARTx_C2_RIE | UARTx_C2_TE;
+    LPUART_CTRL_RE(1) |
+    LPUART_CTRL_RIE(1) |
+    LPUART_CTRL_TE(1);
 }
 
 /*===========================================================================*/
 /* Driver interrupt handlers.                                                */
 /*===========================================================================*/
 
-#if KINETIS_SERIAL_USE_UART0 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART0 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL0_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_interrupt(&SD1);
@@ -306,7 +333,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL0_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART1 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART1 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL1_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_interrupt(&SD2);
@@ -314,7 +341,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL1_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART2 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART2 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL2_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_interrupt(&SD3);
@@ -322,15 +349,15 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL2_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART3 || defined(__DOXYGEN__)
-OSAL_IRQ_HANDLER(KINETIS_SERIAL3_IRQ_VECTOR) {
+#if MIMXRT1062_SERIAL_USE_UART3 || defined(__DOXYGEN__)
+OSAL_IRQ_HANDLER(MIMXRT1062_SERIAL3_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_interrupt(&SD4);
   OSAL_IRQ_EPILOGUE();
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART4 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART4 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL4_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_interrupt(&SD5);
@@ -338,7 +365,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL4_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART5 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART5 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL5_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_interrupt(&SD6);
@@ -346,9 +373,9 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL5_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_HAS_SERIAL_ERROR_IRQ
+#if MIMXRT1062_HAS_SERIAL_ERROR_IRQ
 
-#if KINETIS_SERIAL_USE_UART0 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART0 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL0_ERROR_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
 #if defined(KL2x)
@@ -360,7 +387,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL0_ERROR_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART1 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART1 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL1_ERROR_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_error_interrupt(&SD2);
@@ -368,7 +395,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL1_ERROR_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART2 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART2 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL2_ERROR_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_error_interrupt(&SD3);
@@ -376,7 +403,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL2_ERROR_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART3 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART3 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL3_ERROR_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_error_interrupt(&SD4);
@@ -384,7 +411,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL3_ERROR_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART4 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART4 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL4_ERROR_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_error_interrupt(&SD5);
@@ -392,7 +419,7 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL4_ERROR_IRQ_VECTOR) {
 }
 #endif
 
-#if KINETIS_SERIAL_USE_UART5 || defined(__DOXYGEN__)
+#if MIMXRT1062_SERIAL_USE_UART5 || defined(__DOXYGEN__)
 OSAL_IRQ_HANDLER(KINETIS_SERIAL5_ERROR_IRQ_VECTOR) {
   OSAL_IRQ_PROLOGUE();
   serve_error_interrupt(&SD6);
@@ -413,11 +440,11 @@ OSAL_IRQ_HANDLER(KINETIS_SERIAL5_ERROR_IRQ_VECTOR) {
  */
 void sd_lld_init(void) {
 
-#if KINETIS_SERIAL_USE_UART0
+#if MIMXRT1062_SERIAL_USE_UART0
   /* Driver initialization.*/
-#if ! KINETIS_SERIAL0_IS_LPUART
+#if ! MIMXRT1062_SERIAL0_IS_LPUART
   sd_lld_init_driver(&SD1, (UART_TypeDef *)UART0);
-#else /* ! KINETIS_SERIAL0_IS_LPUART */
+#else /* ! MIMXRT1062_SERIAL0_IS_LPUART */
   /* little endian! */
   sdObjectInit(&SD1, NULL, notify);
   SD1.uart.bdh_p = ((uint8_t *)&(LPUART0->BAUD)) + 1; /* BDH: BAUD, byte 3 */
@@ -429,24 +456,24 @@ void sd_lld_init(void) {
   SD1.uart.s1_p =  ((uint8_t *)&(LPUART0->STAT)) + 2; /* S1: STAT, byte 2 */
   SD1.uart.s2_p =  ((uint8_t *)&(LPUART0->STAT)) + 3; /* S2: STAT, byte 1 */
   SD1.uart.d_p =   ((uint8_t *)&(LPUART0->DATA)) + 0; /* D: DATA, byte 4 */
-#endif /* ! KINETIS_SERIAL0_IS_LPUART */
-#if KINETIS_SERIAL0_IS_UARTLP
+#endif /* ! MIMXRT1062_SERIAL0_IS_LPUART */
+#if MIMXRT1062_SERIAL0_IS_UARTLP
   SD1.uart.c4_p = &(UART0->C4);  /* fix up misconfigured C4 register */
   SD1.uart.uartlp_p = UART0;
   SD1.uart.uart_p = NULL;
-#elif KINETIS_SERIAL0_IS_LPUART
+#elif MIMXRT1062_SERIAL0_IS_LPUART
   SD1.uart.lpuart_p = LPUART0;
   SD1.uart.uart_p = NULL;
-#else /* KINETIS_SERIAL0_IS_LPUART */
+#else /* MIMXRT1062_SERIAL0_IS_LPUART */
   SD1.uart.uart_p = UART0;
-#endif /* KINETIS_SERIAL0_IS_LPUART */
-#endif /* KINETIS_SERIAL_USE_UART0 */
+#endif /* MIMXRT1062_SERIAL0_IS_LPUART */
+#endif /* MIMXRT1062_SERIAL_USE_UART0 */
 
-#if KINETIS_SERIAL_USE_UART1
+#if MIMXRT1062_SERIAL_USE_UART1
   /* Driver initialization.*/
-#if ! KINETIS_SERIAL1_IS_LPUART
+#if ! MIMXRT1062_SERIAL1_IS_LPUART
   sd_lld_init_driver(&SD2, UART1);
-#else /* ! KINETIS_SERIAL1_IS_LPUART */
+#else /* ! MIMXRT1062_SERIAL1_IS_LPUART */
   /* little endian! */
   sdObjectInit(&SD2, NULL, notify);
   SD2.uart.bdh_p = ((uint8_t *)&(LPUART1->BAUD)) + 1; /* BDH: BAUD, byte 3 */
@@ -460,24 +487,36 @@ void sd_lld_init(void) {
   SD2.uart.d_p =   ((uint8_t *)&(LPUART1->DATA)) + 0; /* D: DATA, byte 4 */
   SD2.uart.lpuart_p = LPUART1;
   SD2.uart.uart_p = NULL;
-#endif /* ! KINETIS_SERIAL1_IS_LPUART */
-#endif /* KINETIS_SERIAL_USE_UART1 */
+#endif /* ! MIMXRT1062_SERIAL1_IS_LPUART */
+#endif /* MIMXRT1062_SERIAL_USE_UART1 */
 
-#if KINETIS_SERIAL_USE_UART2
+#if MIMXRT1062_SERIAL_USE_UART2
   sd_lld_init_driver(&SD3, UART2);
-#endif /* KINETIS_SERIAL_USE_UART2 */
+#endif /* MIMXRT1062_SERIAL_USE_UART2 */
 
-#if KINETIS_SERIAL_USE_UART3
-  sd_lld_init_driver(&SD4, UART3);
-#endif /* KINETIS_SERIAL_USE_UART3 */
+#if MIMXRT1062_SERIAL_USE_UART3
+  sd_lld_init_driver(&SD4, NULL);
+#if 0
+  SD4.uart.bdh_p = ((uint8_t *)&(LPUART3->BAUD)) + 1; /* BDH: BAUD, byte 3 */
+  SD4.uart.bdl_p = ((uint8_t *)&(LPUART3->BAUD)) + 0; /* BDL: BAUD, byte 4 */
+  SD4.uart.c1_p =  ((uint8_t *)&(LPUART3->CTRL)) + 0; /* C1: CTRL, byte 4 */
+  SD4.uart.c2_p =  ((uint8_t *)&(LPUART3->CTRL)) + 2; /* C2: CTRL, byte 2 */
+  SD4.uart.c3_p =  ((uint8_t *)&(LPUART3->CTRL)) + 3; /* C3: CTRL, byte 1 */
+  SD4.uart.c4_p =  ((uint8_t *)&(LPUART3->BAUD)) + 3; /* C4: BAUD, byte 1 */
+  SD4.uart.s1_p =  ((uint8_t *)&(LPUART3->STAT)) + 2; /* S1: STAT, byte 2 */
+  SD4.uart.s2_p =  ((uint8_t *)&(LPUART3->STAT)) + 3; /* S2: STAT, byte 1 */
+  SD4.uart.d_p =   ((uint8_t *)&(LPUART3->DATA)) + 0; /* D: DATA, byte 4 */
+#endif
+  SD4.uart.lpuart_p = LPUART3;
+#endif /* MIMXRT1062_SERIAL_USE_UART3 */
 
-#if KINETIS_SERIAL_USE_UART4
+#if MIMXRT1062_SERIAL_USE_UART4
   sd_lld_init_driver(&SD5, UART4);
-#endif /* KINETIS_SERIAL_USE_UART4 */
+#endif /* MIMXRT1062_SERIAL_USE_UART4 */
 
-#if KINETIS_SERIAL_USE_UART5
+#if MIMXRT1062_SERIAL_USE_UART5
   sd_lld_init_driver(&SD6, UART5);
-#endif /* KINETIS_SERIAL_USE_UART5 */
+#endif /* MIMXRT1062_SERIAL_USE_UART5 */
 }
 
 /**
@@ -498,98 +537,104 @@ void sd_lld_start(SerialDriver *sdp, const SerialConfig *config) {
   if (sdp->state == SD_STOP) {
     /* Enables the peripheral.*/
 
-#if KINETIS_SERIAL_USE_UART0
+#if MIMXRT1062_SERIAL_USE_UART0
     if (sdp == &SD1) {
-#if KINETIS_SERIAL0_IS_LPUART
+#if MIMXRT1062_SERIAL0_IS_LPUART
       SIM->SCGC5 |= SIM_SCGC5_LPUART0;
       SIM->SOPT2 =
               (SIM->SOPT2 & ~SIM_SOPT2_LPUART0SRC_MASK) |
               SIM_SOPT2_LPUART0SRC(KINETIS_UART0_CLOCK_SRC);
-#else /* KINETIS_SERIAL0_IS_LPUART */
+#else /* MIMXRT1062_SERIAL0_IS_LPUART */
       SIM->SCGC4 |= SIM_SCGC4_UART0;
-#endif /* KINETIS_SERIAL0_IS_LPUART */
-#if KINETIS_SERIAL0_IS_UARTLP
+#endif /* MIMXRT1062_SERIAL0_IS_LPUART */
+#if MIMXRT1062_SERIAL0_IS_UARTLP
       SIM->SOPT2 =
               (SIM->SOPT2 & ~SIM_SOPT2_UART0SRC_MASK) |
               SIM_SOPT2_UART0SRC(KINETIS_UART0_CLOCK_SRC);
-#endif /* KINETIS_SERIAL0_IS_UARTLP */
+#endif /* MIMXRT1062_SERIAL0_IS_UARTLP */
       configure_uart(sdp, config);
 #if KINETIS_HAS_SERIAL_ERROR_IRQ
-      nvicEnableVector(UART0Status_IRQn, KINETIS_SERIAL_UART0_PRIORITY);
-      nvicEnableVector(UART0Error_IRQn, KINETIS_SERIAL_UART0_PRIORITY);
+      nvicEnableVector(UART0Status_IRQn, MIMXRT1062_SERIAL_UART0_PRIORITY);
+      nvicEnableVector(UART0Error_IRQn, MIMXRT1062_SERIAL_UART0_PRIORITY);
 #else /* KINETIS_HAS_SERIAL_ERROR_IRQ */
-#if KINETIS_SERIAL0_IS_LPUART
-      nvicEnableVector(LPUART0_IRQn, KINETIS_SERIAL_UART0_PRIORITY);
-#else /* KINETIS_SERIAL0_IS_LPUART */
-      nvicEnableVector(UART0_IRQn, KINETIS_SERIAL_UART0_PRIORITY);
-#endif /* KINETIS_SERIAL0_IS_LPUART */
+#if MIMXRT1062_SERIAL0_IS_LPUART
+      nvicEnableVector(LPUART0_IRQn, MIMXRT1062_SERIAL_UART0_PRIORITY);
+#else /* MIMXRT1062_SERIAL0_IS_LPUART */
+      nvicEnableVector(UART0_IRQn, MIMXRT1062_SERIAL_UART0_PRIORITY);
+#endif /* MIMXRT1062_SERIAL0_IS_LPUART */
 #endif /* KINETIS_HAS_SERIAL_ERROR_IRQ */
     }
-#endif /* KINETIS_SERIAL_USE_UART0 */
+#endif /* MIMXRT1062_SERIAL_USE_UART0 */
 
-#if KINETIS_SERIAL_USE_UART1
+#if MIMXRT1062_SERIAL_USE_UART1
     if (sdp == &SD2) {
-#if KINETIS_SERIAL1_IS_LPUART
+#if MIMXRT1062_SERIAL1_IS_LPUART
       SIM->SCGC5 |= SIM_SCGC5_LPUART1;
       SIM->SOPT2 =
               (SIM->SOPT2 & ~SIM_SOPT2_LPUART1SRC_MASK) |
               SIM_SOPT2_LPUART1SRC(KINETIS_UART1_CLOCK_SRC);
-#else /* KINETIS_SERIAL1_IS_LPUART */
+#else /* MIMXRT1062_SERIAL1_IS_LPUART */
       SIM->SCGC4 |= SIM_SCGC4_UART1;
-#endif /* KINETIS_SERIAL1_IS_LPUART */
+#endif /* MIMXRT1062_SERIAL1_IS_LPUART */
       configure_uart(sdp, config);
-#if KINETIS_HAS_SERIAL_ERROR_IRQ
-      nvicEnableVector(UART1Status_IRQn, KINETIS_SERIAL_UART1_PRIORITY);
-      nvicEnableVector(UART1Error_IRQn, KINETIS_SERIAL_UART0_PRIORITY);
+#if MIMXRT1062_HAS_SERIAL_ERROR_IRQ
+      nvicEnableVector(UART1Status_IRQn, MIMXRT1062_SERIAL_UART1_PRIORITY);
+      nvicEnableVector(UART1Error_IRQn, MIMXRT1062_SERIAL_UART0_PRIORITY);
 #else /* KINETIS_HAS_SERIAL_ERROR_IRQ */
-#if KINETIS_SERIAL1_IS_LPUART
-      nvicEnableVector(LPUART1_IRQn, KINETIS_SERIAL_UART1_PRIORITY);
-#else /* KINETIS_SERIAL1_IS_LPUART */
-      nvicEnableVector(UART1_IRQn, KINETIS_SERIAL_UART1_PRIORITY);
-#endif /* KINETIS_SERIAL1_IS_LPUART */
+#if MIMXRT1062_SERIAL1_IS_LPUART
+      nvicEnableVector(LPUART1_IRQn, MIMXRT1062_SERIAL_UART1_PRIORITY);
+#else /* MIMXRT1062_SERIAL1_IS_LPUART */
+      nvicEnableVector(UART1_IRQn, MIMXRT1062_SERIAL_UART1_PRIORITY);
+#endif /* MIMXRT1062_SERIAL1_IS_LPUART */
 #endif /* KINETIS_HAS_SERIAL_ERROR_IRQ */
     }
-#endif /* KINETIS_SERIAL_USE_UART1 */
+#endif /* MIMXRT1062_SERIAL_USE_UART1 */
 
-#if KINETIS_SERIAL_USE_UART2
+#if MIMXRT1062_SERIAL_USE_UART2
     if (sdp == &SD3) {
       SIM->SCGC4 |= SIM_SCGC4_UART2;
       configure_uart(sdp, config);
 #if KINETIS_HAS_SERIAL_ERROR_IRQ
-      nvicEnableVector(UART2Status_IRQn, KINETIS_SERIAL_UART2_PRIORITY);
-      nvicEnableVector(UART2Error_IRQn, KINETIS_SERIAL_UART0_PRIORITY);
+      nvicEnableVector(UART2Status_IRQn, MIMXRT1062_SERIAL_UART2_PRIORITY);
+      nvicEnableVector(UART2Error_IRQn, MIMXRT1062_SERIAL_UART0_PRIORITY);
 #else /* KINETIS_HAS_SERIAL_ERROR_IRQ */
-      nvicEnableVector(UART2_IRQn, KINETIS_SERIAL_UART2_PRIORITY);
+      nvicEnableVector(UART2_IRQn, MIMXRT1062_SERIAL_UART2_PRIORITY);
 #endif /* KINETIS_HAS_SERIAL_ERROR_IRQ */
     }
-#endif /* KINETIS_SERIAL_USE_UART2 */
+#endif /* MIMXRT1062_SERIAL_USE_UART2 */
 
-#if KINETIS_SERIAL_USE_UART3
+#if MIMXRT1062_SERIAL_USE_UART3
     if (sdp == &SD4) {
-      SIM->SCGC4 |= SIM_SCGC4_UART3;
-      configure_uart(sdp, config);
-      nvicEnableVector(UART3Status_IRQn, KINETIS_SERIAL_UART3_PRIORITY);
-      nvicEnableVector(UART3Error_IRQn, KINETIS_SERIAL_UART3_PRIORITY);
-    }
-#endif /* KINETIS_SERIAL_USE_UART3 */
+      //SIM->SCGC4 |= SIM_SCGC4_UART3;
+      //configure_uart(sdp, config);
+      /* SIM->SCGC5 |= SIM_SCGC5_LPUART0; */
+      /* SIM->SOPT2 = */
+      /*         (SIM->SOPT2 & ~SIM_SOPT2_LPUART0SRC_MASK) | */
+      /*         SIM_SOPT2_LPUART0SRC(KINETIS_UART0_CLOCK_SRC); */
 
-#if KINETIS_SERIAL_USE_UART4
+      CCM->CCGR0 |= CCM_CCGR0_CG6(1); // turn on Serial4
+      configure_uart(sdp, config);      
+      nvicEnableVector(LPUART3_IRQn, MIMXRT1062_SERIAL_UART3_PRIORITY);
+    }
+#endif /* MIMXRT1062_SERIAL_USE_UART3 */
+
+#if MIMXRT1062_SERIAL_USE_UART4
     if (sdp == &SD5) {
       SIM->SCGC1 |= SIM_SCGC1_UART4;
       configure_uart(sdp, config);
-      nvicEnableVector(UART4Status_IRQn, KINETIS_SERIAL_UART4_PRIORITY);
-      nvicEnableVector(UART4Error_IRQn, KINETIS_SERIAL_UART4_PRIORITY);
+      nvicEnableVector(UART4Status_IRQn, MIMXRT1062_SERIAL_UART4_PRIORITY);
+      nvicEnableVector(UART4Error_IRQn, MIMXRT1062_SERIAL_UART4_PRIORITY);
     }
-#endif /* KINETIS_SERIAL_USE_UART4 */
+#endif /* MIMXRT1062_SERIAL_USE_UART4 */
 
-#if KINETIS_SERIAL_USE_UART5
+#if MIMXRT1062_SERIAL_USE_UART5
     if (sdp == &SD6) {
       SIM->SCGC1 |= SIM_SCGC1_UART5;
       configure_uart(sdp, config);
-      nvicEnableVector(UART5Status_IRQn, KINETIS_SERIAL_UART5_PRIORITY);
-      nvicEnableVector(UART5Error_IRQn, KINETIS_SERIAL_UART5_PRIORITY);
+      nvicEnableVector(UART5Status_IRQn, MIMXRT1062_SERIAL_UART5_PRIORITY);
+      nvicEnableVector(UART5Error_IRQn, MIMXRT1062_SERIAL_UART5_PRIORITY);
     }
-#endif /* KINETIS_SERIAL_USE_UART5 */
+#endif /* MIMXRT1062_SERIAL_USE_UART5 */
 
   }
   /* Configures the peripheral.*/
@@ -610,47 +655,47 @@ void sd_lld_stop(SerialDriver *sdp) {
   if (sdp->state == SD_READY) {
     /* TODO: Resets the peripheral.*/
 
-#if KINETIS_SERIAL_USE_UART0
+#if MIMXRT1062_SERIAL_USE_UART0
     if (sdp == &SD1) {
 #if KINETIS_HAS_SERIAL_ERROR_IRQ
       nvicDisableVector(UART0Status_IRQn);
       nvicDisableVector(UART0Error_IRQn);
 #else /* KINETIS_HAS_SERIAL_ERROR_IRQ */
-#if KINETIS_SERIAL0_IS_LPUART
+#if MIMXRT1062_SERIAL0_IS_LPUART
       nvicDisableVector(LPUART0_IRQn);
-#else /* KINETIS_SERIAL0_IS_LPUART */
+#else /* MIMXRT1062_SERIAL0_IS_LPUART */
       nvicDisableVector(UART0_IRQn);
-#endif /* KINETIS_SERIAL0_IS_LPUART */
+#endif /* MIMXRT1062_SERIAL0_IS_LPUART */
 #endif /* KINETIS_HAS_SERIAL_ERROR_IRQ */
-#if KINETIS_SERIAL0_IS_LPUART
+#if MIMXRT1062_SERIAL0_IS_LPUART
       SIM->SCGC5 &= ~SIM_SCGC5_LPUART0;
-#else /* KINETIS_SERIAL0_IS_LPUART */
+#else /* MIMXRT1062_SERIAL0_IS_LPUART */
       SIM->SCGC4 &= ~SIM_SCGC4_UART0;
-#endif /* KINETIS_SERIAL0_IS_LPUART */
+#endif /* MIMXRT1062_SERIAL0_IS_LPUART */
     }
 #endif
 
-#if KINETIS_SERIAL_USE_UART1
+#if MIMXRT1062_SERIAL_USE_UART1
     if (sdp == &SD2) {
 #if KINETIS_HAS_SERIAL_ERROR_IRQ
       nvicDisableVector(UART1Status_IRQn);
       nvicDisableVector(UART1Error_IRQn);
 #else /* KINETIS_HAS_SERIAL_ERROR_IRQ */
-#if KINETIS_SERIAL1_IS_LPUART
+#if MIMXRT1062_SERIAL1_IS_LPUART
       nvicDisableVector(LPUART1_IRQn);
-#else /* KINETIS_SERIAL1_IS_LPUART */
+#else /* MIMXRT1062_SERIAL1_IS_LPUART */
       nvicDisableVector(UART1_IRQn);
-#endif /* KINETIS_SERIAL1_IS_LPUART */
+#endif /* MIMXRT1062_SERIAL1_IS_LPUART */
 #endif /* KINETIS_HAS_SERIAL_ERROR_IRQ */
-#if KINETIS_SERIAL1_IS_LPUART
+#if MIMXRT1062_SERIAL1_IS_LPUART
       SIM->SCGC5 &= ~SIM_SCGC5_LPUART1;
-#else /* KINETIS_SERIAL1_IS_LPUART */
+#else /* MIMXRT1062_SERIAL1_IS_LPUART */
       SIM->SCGC4 &= ~SIM_SCGC4_UART1;
-#endif /* KINETIS_SERIAL1_IS_LPUART */
+#endif /* MIMXRT1062_SERIAL1_IS_LPUART */
     }
 #endif
 
-#if KINETIS_SERIAL_USE_UART2
+#if MIMXRT1062_SERIAL_USE_UART2
     if (sdp == &SD3) {
 #if KINETIS_HAS_SERIAL_ERROR_IRQ
       nvicDisableVector(UART2Status_IRQn);
@@ -662,15 +707,14 @@ void sd_lld_stop(SerialDriver *sdp) {
     }
 #endif
 
-#if KINETIS_SERIAL_USE_UART3
+#if MIMXRT1062_SERIAL_USE_UART3
     if (sdp == &SD4) {
-      nvicDisableVector(UART3Status_IRQn);
-      nvicDisableVector(UART3Error_IRQn);
-      SIM->SCGC4 &= ~SIM_SCGC4_UART3;
+      nvicDisableVector(LPUART3_IRQn);      
+      CCM->CCGR0 &= ~CCM_CCGR0_CG6(1); // turn off Serial4
     }
 #endif
 
-#if KINETIS_SERIAL_USE_UART4
+#if MIMXRT1062_SERIAL_USE_UART4
     if (sdp == &SD5) {
       nvicDisableVector(UART4Status_IRQn);
       nvicDisableVector(UART4Error_IRQn);
@@ -678,7 +722,7 @@ void sd_lld_stop(SerialDriver *sdp) {
     }
 #endif
 
-#if KINETIS_SERIAL_USE_UART5
+#if MIMXRT1062_SERIAL_USE_UART5
     if (sdp == &SD6) {
       nvicDisableVector(UART5Status_IRQn);
       nvicDisableVector(UART5Error_IRQn);
