@@ -39,13 +39,14 @@
 #define PAL_MODE_ALTERNATIVE_6      0x15
 #define PAL_MODE_ALTERNATIVE_7      0x16
 
-#define PIN_MUX_ALTERNATIVE(x)      PORTx_PCRn_MUX(x)
+#define PIN_MUX_ALTERNATIVE(x)      IOMUXC_SW_MUX_CTL_PAD_MUX_MODE(x)
 
 /*===========================================================================*/
 /* I/O Ports Types and constants.                                            */
 /*===========================================================================*/
 
-#define TOTAL_PORTS                 5
+#define TOTAL_PORTS                 9
+// TODO: pads per port
 #define PADS_PER_PORT               32
 
 /**
@@ -80,7 +81,7 @@ typedef uint32_t ioline_t;
  *          any assumption about it, use the provided macros when populating
  *          variables of this type.
  */
-typedef GPIO_TypeDef *ioportid_t;
+typedef GPIO_Type *ioportid_t;
 
 /**
  * @brief   Type of an pad identifier.
@@ -115,29 +116,49 @@ typedef struct {
 /*===========================================================================*/
 
 /**
- * @brief   GPIO port A identifier.
+ * @brief   GPIO1 identifier.
  */
-#define IOPORT1          GPIOA
+#define IOPORT1          GPIO1
 
 /**
- * @brief   GPIO port B identifier.
+ * @brief   GPIO2 identifier.
  */
-#define IOPORT2          GPIOB
+#define IOPORT2          GPIO2
 
 /**
- * @brief   GPIO port C identifier.
+ * @brief   GPIO3 identifier.
  */
-#define IOPORT3          GPIOC
+#define IOPORT3          GPIO3
 
 /**
- * @brief   GPIO port D identifier.
+ * @brief   GPIO4 identifier.
  */
-#define IOPORT4          GPIOD
+#define IOPORT4          GPIO4
 
 /**
- * @brief   GPIO port E identifier.
+ * @brief   GPIO5 identifier.
  */
-#define IOPORT5          GPIOE
+#define IOPORT5          GPIO5
+
+/**
+ * @brief   GPIO6 identifier.
+ */
+#define IOPORT6          GPIO6
+
+/**
+ * @brief   GPIO7 identifier.
+ */
+#define IOPORT7          GPIO7
+
+/**
+ * @brief   GPIO8 identifier.
+ */
+#define IOPORT8          GPIO8
+
+/**
+ * @brief   GPIO9 identifier.
+ */
+#define IOPORT9          GPIO9
 
 /**
  * @name    Line handling macros
@@ -151,19 +172,19 @@ typedef struct {
  *          address that's zero on all Kinetis devices.
  */
 #define PAL_LINE(port, pad)                                                 \
-  ((ioline_t)((uint32_t)(port) | ((uint32_t)(pad)<<20)))
+  ((ioline_t)((uint32_t)(port) | ((uint32_t)(pad))))
 
 /**
  * @brief   Decodes a port identifier from a line identifier.
  */
 #define PAL_PORT(line)                                                      \
-  ((GPIO_TypeDef *)(((uint32_t)(line)) & 0xF00FFFFFU))
+  ((GPIO_Type *)(((uint32_t)(line)) & 0xFFFFF000U))
 
 /**
  * @brief   Decodes a pad identifier from a line identifier.
  */
 #define PAL_PAD(line)                                                       \
-  ((uint32_t)((uint32_t)(line) & 0x0FF00000U)>>20)
+  ((uint32_t)((uint32_t)(line) & 0x00000FFFU))
 
 /**
  * @brief   Value identifying an invalid line.
@@ -193,8 +214,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_readport(port) \
-          (port)->PDIR
+  //#define pal_lld_readport(port)  (port)->PDIR
 
 /**
  * @brief   Reads the output latch.
@@ -206,8 +226,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_readlatch(port) \
-          (port)->PDOR
+  //#define pal_lld_readlatch(port)  (port)->PDOR
 
 /**
  * @brief   Writes a bits mask on a I/O port.
@@ -217,8 +236,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_writeport(port, bits) \
-          (port)->PDOR = (bits)
+  //#define pal_lld_writeport(port, bits)  (port)->PDOR = (bits)
 
 /**
  * @brief   Sets a bits mask on a I/O port.
@@ -231,8 +249,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_setport(port, bits) \
-          (port)->PSOR = (bits)
+//#define pal_lld_setport(port, bits)  (port)->PSOR = (bits)
 
 /**
  * @brief   Clears a bits mask on a I/O port.
@@ -245,8 +262,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_clearport(port, bits) \
-          (port)->PCOR = (bits)
+//#define pal_lld_clearport(port, bits)  (port)->PCOR = (bits)
 
 /**
  * @brief   Toggles a bits mask on a I/O port.
@@ -259,8 +275,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_toggleport(port, bits) \
-          (port)->PTOR = (bits)
+//#define pal_lld_toggleport(port, bits)   (port)->PTOR = (bits)
 
 /**
  * @brief   Reads a group of bits.
@@ -353,7 +368,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_setpad(port, pad) (port)->PSOR = ((uint32_t) 1 << (pad))
+#define pal_lld_setpad(port, pad) _pal_lld_writepad(port, pad, PAL_HIGH)
 
 /**
  * @brief   Clears a pad logical state to @p PAL_LOW.
@@ -366,7 +381,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_clearpad(port, pad) (port)->PCOR = ((uint32_t) 1 << (pad))
+#define pal_lld_clearpad(port, pad) _pal_lld_writepad(port, pad, PAL_LOW)
 
 /**
  * @brief   Toggles a pad logical state.
@@ -379,7 +394,7 @@ typedef struct {
  *
  * @notapi
  */
-#define pal_lld_togglepad(port, pad) (port)->PTOR = ((uint32_t) 1 << (pad))
+#define pal_lld_togglepad(port, pad) _pal_lld_togglepad(port, pad)
 
 /**
  * @brief   Pad mode setup.
