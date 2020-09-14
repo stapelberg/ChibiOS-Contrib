@@ -29,7 +29,7 @@
 #define CHCONF_H
 
 #define _CHIBIOS_RT_CONF_
-#define _CHIBIOS_RT_CONF_VER_6_1_
+#define _CHIBIOS_RT_CONF_VER_7_0_
 
 /*===========================================================================*/
 /**
@@ -163,6 +163,11 @@
 #if !defined(CH_CFG_USE_TM)
 #define CH_CFG_USE_TM                       TRUE
 #endif
+
+#if !defined(CH_CFG_USE_TIMESTAMP)
+#define CH_CFG_USE_TIMESTAMP                TRUE
+#endif
+
 
 /**
  * @brief   Threads registry APIs.
@@ -634,7 +639,7 @@
  * @brief   System structure extension.
  * @details User fields added to the end of the @p ch_system_t structure.
  */
-#define CH_CFG_SYSTEM_EXTRA_FIELDS                                          \
+#define CH_CFG_OS_INSTANCE_EXTRA_FIELDS                                     \
   /* Add threads custom fields here.*/
 
 /**
@@ -642,7 +647,7 @@
  * @details User initialization code added to the @p chSysInit() function
  *          just before interrupts are enabled globally.
  */
-#define CH_CFG_SYSTEM_INIT_HOOK() {                                         \
+#define CH_CFG_OS_INSTANCE_INIT_HOOK(oip) {                                 \
   /* Add threads initialization code here.*/                                \
 }
 
