@@ -326,6 +326,8 @@ void usb_pll_start(void) {
 #define SIZE_4G		(SCB_MPU_RASR_SIZE(31) | SCB_MPU_RASR_ENABLE)
 #define REGION(n)	(SCB_MPU_RBAR_REGION(n) | SCB_MPU_RBAR_VALID)
 
+extern unsigned long _ebss;
+
 void configure_cache(void)
 {
 	//printf("MPU_TYPE = %08lX\n", SCB_MPU_TYPE);
@@ -334,7 +336,7 @@ void configure_cache(void)
 	// TODO: check if caches already active - skip?
 
 	MPU->CTRL = 0; // turn off MPU
-
+#if 0
 	uint32_t i = 0;
 	MPU->RBAR = 0x00000000 | REGION(i++); //https://developer.arm.com/docs/146793866/10/why-does-the-cortex-m7-initiate-axim-read-accesses-to-memory-addresses-that-do-not-fall-under-a-defined-mpu-region
 	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_4G;
@@ -352,9 +354,12 @@ void configure_cache(void)
 
 	MPU->RBAR = 0x20000000 | REGION(i++); // DTCM
 	MPU->RASR = MEM_NOCACHE | READWRITE | NOEXEC | SIZE_512K;
+
+	// _ebss == ADDR(.bss) + SIZEOF(.bss)
+	
 // TODO: update &_ebss with the correct symbol in ChibiOS
-	//MPU->RBAR = ((uint32_t)&_ebss) | REGION(i++); // trap stack overflow
-	//MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_32B;
+	MPU->RBAR = ((uint32_t)&_ebss) | REGION(i++); // trap stack overflow
+	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_32B;
 
 	MPU->RBAR = 0x20200000 | REGION(i++); // RAM (AXI bus)
 	MPU->RASR = MEM_CACHE_WBWA | READWRITE | NOEXEC | SIZE_1M;
@@ -374,6 +379,7 @@ void configure_cache(void)
 	// TODO: protect access to power supply config
 
 	MPU->CTRL = SCB_MPU_CTRL_ENABLE;
+#endif
 
 	// cache enable, ARM DDI0403E, pg 628
 	asm("dsb");
