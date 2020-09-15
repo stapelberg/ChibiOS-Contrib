@@ -17,7 +17,7 @@
 
 /**
  * @file    USBHSv1/hal_usb_lld.h
- * @brief   KINETIS USB subsystem low level driver header.
+ * @brief   MIMXRT1062 USB subsystem low level driver header.
  *
  * @addtogroup USB
  * @{
@@ -35,7 +35,7 @@
 /**
  * @brief   Maximum endpoint address.
  */
-#define USB_MAX_ENDPOINTS                   15
+#define USB_MAX_ENDPOINTS                   7
 
 /**
  * @brief   Status stage handling method.
@@ -50,7 +50,7 @@
 /**
  * @brief   This device requires the address change after the status packet.
  */
-#define USB_SET_ADDRESS_MODE                USB_LATE_SET_ADDRESS
+#define USB_SET_ADDRESS_MODE                USB_EARLY_SET_ADDRESS
 
 /*===========================================================================*/
 /* Driver pre-compile time settings.                                         */
@@ -61,19 +61,23 @@
  * @details If set to @p TRUE the support for USB1 is included.
  * @note    The default is @p TRUE.
  */
-#if !defined(KINETIS_USB_USE_USB0) || defined(__DOXYGEN__)
-#define KINETIS_USB_USE_USB0                  FALSE
+#if !defined(MIMXRT1062_USB_USE_USB1) || defined(__DOXYGEN__)
+#define MIMXRT1062_USB_USE_USB1                  TRUE
+#endif
+
+#if !defined(MIMXRT1062_USB1_IS_USBOTG)
+#define MIMXRT1062_USB1_IS_USBOTG TRUE
 #endif
 
 /**
  * @brief   USB1 interrupt priority level setting.
  */
-#if !defined(KINETIS_USB_USB0_IRQ_PRIORITY)|| defined(__DOXYGEN__)
-#define KINETIS_USB_USB0_IRQ_PRIORITY      5
+#if !defined(MIMXRT1062_USB_USB1_IRQ_PRIORITY)|| defined(__DOXYGEN__)
+#define MIMXRT1062_USB_USB1_IRQ_PRIORITY      3
 #endif
 
-#if !defined(KINETIS_USB_ENDPOINTS) || defined(__DOXYGEN__)
-  #define KINETIS_USB_ENDPOINTS USB_MAX_ENDPOINTS+1
+#if !defined(MIMXRT1062_USB_ENDPOINTS) || defined(__DOXYGEN__)
+#define MIMXRT1062_USB_ENDPOINTS (USB_MAX_ENDPOINTS+1)
 #endif
 
 /**
@@ -87,21 +91,21 @@
 /* Derived constants and error checks.                                       */
 /*===========================================================================*/
 
-#if KINETIS_USB_USE_USB0 && !KINETIS_HAS_USB
+#if MIMXRT1062_USB_USE_USB1 && !MIMXRT1062_HAS_USB
 #error "USB not present in the selected device"
 #endif
 
-#if !KINETIS_USB_USE_USB0
+#if !MIMXRT1062_USB_USE_USB1
 #error "USB driver activated but no USB peripheral assigned"
 #endif
 
-#if KINETIS_USB_USE_USB0 &&                                                   \
-    !OSAL_IRQ_IS_VALID_PRIORITY(KINETIS_USB_USB0_IRQ_PRIORITY)
-#error "Invalid IRQ priority assigned to KINETIS_USB_USB0_IRQ_PRIORITY"
+#if MIMXRT1062_USB_USE_USB1 &&                                                   \
+    !OSAL_IRQ_IS_VALID_PRIORITY(MIMXRT1062_USB_USB1_IRQ_PRIORITY)
+#error "Invalid IRQ priority assigned to MIMXRT1062_USB_USB1_IRQ_PRIORITY"
 #endif
 
-#if !defined(KINETIS_USB_IRQ_VECTOR)
-#error "KINETIS_USB_IRQ_VECTOR not defined"
+#if !defined(MIMXRT1062_USB0_IRQ_VECTOR)
+#error "MIMXRT1062_USB0_IRQ_VECTOR not defined"
 #endif
 
 #if (USB_HOST_WAKEUP_DURATION < 2) || (USB_HOST_WAKEUP_DURATION > 15)
@@ -112,10 +116,100 @@
 /* Driver data structures and types.                                         */
 /*===========================================================================*/
 
+
+// → page 2344, 42.5.5 “Device Data Structures”
+
+// → page 2348, 42.5.5.2 Endpoint Transfer Descriptor (dTD)
+// NXP: usb_device_ehci_dtd_struct_t
+typedef struct transfer_struct transfer_t;
+struct transfer_struct {
+  // Next dTD Pointer
+  //
+  // 1 = invalid pointer, or address of the next transfer element descriptor
+  // (aligned to a 32-byte boundary, i.e. lowest 4 bits are all zero).
+  //
+  // This is the only field that can be modified in an active dTD,
+  // but only as described in “Managing Transfers with Transfer Descriptors”.
+  transfer_t* next;
+
+  // TODO: should be called |token|, not |status|
+  //
+  // IOC = Interrupt On Complete: USBINT will be set in response to the device
+  // controller (hardware) being finished with this dTD.
+  //
+  // bit 7 = active
+  // bit 6 = halted
+  // bit 5 = data buffer error
+  // bit 3 = transaction error
+  volatile uint32_t status;
+  
+  uint32_t pointer0;
+  uint32_t pointer1;
+  uint32_t pointer2;
+  uint32_t pointer3;
+  uint32_t pointer4;
+  
+  uint32_t callback_param;
+};
+
+typedef struct endpoint_struct endpoint_t;
+
+// → page 2346, “Table 42-57 Endpoint Queue Head (dQH)”
+// NXP: usb_device_ehci_qh_struct_t
+struct endpoint_struct {
+  // → page 2347, 42.5.5.1.1 Endpoint Capabilities/Characteristics
+  volatile uint32_t config;
+
+  // → page 2348, 42.5.5.1.3 Current dTD Pointer
+  // for use by hardware only, should not be modified.
+  // NXP: currentDtdPointer
+  volatile uint32_t current;
+
+  // → page 2347, 42.5.5.1.1, Transfer Overlay-Endpoint Queue Head
+  // working space for the device controller
+  // NXP: nextDtdPointer
+  volatile uint32_t next;
+  // NXP: dtdToken
+  volatile uint32_t status;
+  volatile uint32_t pointer0;
+  volatile uint32_t pointer1;
+  volatile uint32_t pointer2;
+  volatile uint32_t pointer3;
+  volatile uint32_t pointer4;
+  
+  volatile uint32_t reserved;
+
+  // → page 2348, 42.5.5.1.4 Set-up Buffer
+  // NXP: setupBuffer
+  uint32_t setup0;
+  uint32_t setup1;
+
+  // -- 48 byte consumed, need to fill 64, i.e. 4 x uint32 --
+  //
+  // 56.4.5.1 Endpoint Queue Head (dQH)
+  //
+  // The device Endpoint Queue Head (dQH) is where all transfers for a given
+  // endpoint are managed. The dQH is a 48-byte data structure, but must be
+  // aligned on 64-byte boundaries.
+  //
+  // NXP: setupBufferBack[2]
+  // NXP: endpointStatusUnion
+  // NXP: reserved2
+
+  transfer_t *head;
+  transfer_t *tail;
+  void (*callback_function)(transfer_t *completed_transfer);
+  uint32_t last_setup_offset;
+};
+
+
 /**
  * @brief   Type of an IN endpoint state structure.
  */
 typedef struct {
+  // Must come first so that we can align the USBInEndpointState:
+  transfer_t transfer __attribute__((aligned(32)));
+  
   /**
    * @brief   Requested transmit transfer size.
    */
@@ -134,17 +228,16 @@ typedef struct {
    */
   thread_reference_t            thread;
 #endif
-  /* End of the mandatory fields.*/
-  /* */
-  bool                          odd_even;  /* ODD / EVEN */
-  /* */
-  bool                          data_bank; /* DATA0 / DATA1 */
+
 } USBInEndpointState;
 
 /**
  * @brief   Type of an OUT endpoint state structure.
  */
 typedef struct {
+  // Must come first so that we can align the USBOutEndpointState:
+  transfer_t transfer __attribute__((aligned(32)));
+  
   /**
    * @brief   Requested receive transfer size.
    */
@@ -164,14 +257,7 @@ typedef struct {
   thread_reference_t            thread;
 #endif
   /* End of the mandatory fields.*/
-  /**
-   * @brief   Number of packets to receive.
-   */
-  uint16_t                      rxpkts;
-  /* */
-  bool                          odd_even;  /* ODD / EVEN */
-  /* */
-  bool                          data_bank; /* DATA0 / DATA1 */
+
 } USBOutEndpointState;
 
 /**
@@ -363,7 +449,7 @@ struct USBDriver {
  *
  * @notapi
  */
-#define usb_lld_get_frame_number(usbp) ((USB0->FRMNUMH<<8)|USB0->FRMNUML)
+#define usb_lld_get_frame_number(usbp) ((USB1->FRMNUMH<<8)|USB1->FRMNUML)
 
 /**
  * @brief   Returns the exact size of a receive transaction.
@@ -388,7 +474,7 @@ struct USBDriver {
  * @api
  */
 #if !defined(usb_lld_connect_bus)
-#define usb_lld_connect_bus(usbp)   (USB0->CONTROL |= USBx_CONTROL_DPPULLUPNONOTG)
+#define usb_lld_connect_bus(usbp) USB1->USBCMD |= USB_USBCMD_RS(1)
 #endif
 
 /**
@@ -397,12 +483,8 @@ struct USBDriver {
  * @api
  */
 #if !defined(usb_lld_disconnect_bus)
-/* Writing to USB0->CONTROL causes an unhandled exception when USB module is not clocked. */
-#if KINETIS_USB0_IS_USBOTG
-#define usb_lld_disconnect_bus(usbp) if(SIM->SCGC4 & SIM_SCGC4_USBOTG) {USB0->CONTROL &= ~USBx_CONTROL_DPPULLUPNONOTG;} else {}
-#else /* KINETIS_USB0_IS_USBOTG */
-#define usb_lld_disconnect_bus(usbp) if(SIM->SCGC4 & SIM_SCGC4_USBFS) {USB0->CONTROL &= ~USBx_CONTROL_DPPULLUPNONOTG;} else {}
-#endif /* KINETIS_USB0_IS_USBOTG */
+/* Writing to USB1->CONTROL causes an unhandled exception when USB module is not clocked. */
+#define usb_lld_disconnect_bus(usbp) do { if (CCM->CCGR6 & CCM_CCGR6_CG0_MASK) { USB1->USBCMD |= USB_USBCMD_RS(0); } } while (0)
 #endif
 
 /**
@@ -410,18 +492,18 @@ struct USBDriver {
  *
  * @notapi
  */
-#define usb_lld_wakeup_host(usbp)                                     \
-  do{                                                                 \
-    USB0->CTL |= USBx_CTL_RESUME;                                     \
-    osalThreadSleepMilliseconds(USB_HOST_WAKEUP_DURATION);            \
-    USB0->CTL &= ~USBx_CTL_RESUME;                                    \
-  } while (false)
+/* #define usb_lld_wakeup_host(usbp)                                     \ */
+/*   do{                                                                 \ */
+/*     USB1->CTL |= USBx_CTL_RESUME;                                     \ */
+/*     osalThreadSleepMilliseconds(USB_HOST_WAKEUP_DURATION);            \ */
+/*     USB1->CTL &= ~USBx_CTL_RESUME;                                    \ */
+/*   } while (false) */
 
 /*===========================================================================*/
 /* External declarations.                                                    */
 /*===========================================================================*/
 
-#if KINETIS_USB_USE_USB0 && !defined(__DOXYGEN__)
+#if MIMXRT1062_USB_USE_USB1 && !defined(__DOXYGEN__)
 extern USBDriver USBD1;
 #endif
 
@@ -444,6 +526,7 @@ extern "C" {
   void usb_lld_stall_in(USBDriver *usbp, usbep_t ep);
   void usb_lld_clear_out(USBDriver *usbp, usbep_t ep);
   void usb_lld_clear_in(USBDriver *usbp, usbep_t ep);
+  void usb_lld_end_setup(USBDriver *usbp, usbep_t ep);
 #ifdef __cplusplus
 }
 #endif
