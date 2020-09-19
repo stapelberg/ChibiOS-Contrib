@@ -55,12 +55,12 @@ USBDriver USBD1;
 /**
  * @brief   IN EP0 state.
  */
-USBInEndpointState ep0in;
+USBInEndpointState ep0in __attribute__ ((used, aligned(32)));
 
 /**
  * @brief   OUT EP0 state.
  */
-USBOutEndpointState ep0out;
+USBOutEndpointState ep0out __attribute__ ((used, aligned(32)));
 
 /**
  * @brief   Buffer for the EP0 setup packets.
@@ -83,50 +83,17 @@ static const USBEndpointConfig ep0config = {
   .setup_buf = ep0setup_buffer,
 };
 
-// → page 2344, “Device Data Structures”
 
-typedef struct transfer_struct transfer_t;
-struct transfer_struct {
-  uint32_t next;
-  volatile uint32_t status;
-  uint32_t pointer0;
-  uint32_t pointer1;
-  uint32_t pointer2;
-  uint32_t pointer3;
-  uint32_t pointer4;
-  uint32_t callback_param;
-};
+// TODO: use per-driver state instead
 
-typedef struct endpoint_struct endpoint_t;
+// Queue Heads must be laid out in memory in this order:
+#define QH_OFFSET_OUT 0 /* receive, i.e. host to device */
+#define QH_OFFSET_IN 1  /* transmit, i.e. device to host */
 
-// → page 2346, “Table 42-57 Endpoint Queue Head (dQH)”
-struct endpoint_struct {
-  uint32_t config;
-  uint32_t current;
-  uint32_t next;
-  uint32_t status;
-  uint32_t pointer0;
-  uint32_t pointer1;
-  uint32_t pointer2;
-  uint32_t pointer3;
-  uint32_t pointer4;
-  uint32_t reserved;
-  uint32_t setup0;
-  uint32_t setup1;
-
-  // These extra fields make up the remainder of the 64 bytes on which Queue
-  // Heads must be aligned:
-  transfer_t *first_transfer;
-  transfer_t *last_transfer;
-  void (*callback_function)(transfer_t *completed_transfer);
-  uint32_t unused1;
-};
-
+// → page 2345, 42.5.5, “Device Data Structures”
+// must be aligned to a 2k boundary
 // Two Queue Heads (1 rx, 1 tx) per endpoint:
-endpoint_t endpoint_queue_head[(MIMXRT1062_USB_ENDPOINTS+1)*2] __attribute__ ((used, aligned(4096)));
-
-transfer_t endpoint0_transfer_data __attribute__ ((used, aligned(32)));
-transfer_t endpoint0_transfer_ack  __attribute__ ((used, aligned(32)));
+endpoint_t endpoint_queue_head[(MIMXRT1062_USB_ENDPOINTS)*2] __attribute__ ((used, aligned(4096)));
 
 typedef union {
   struct {
@@ -167,7 +134,13 @@ static void delay(const uint32_t cycles) {
   }
 }
 
-void usb_transfer_schedule(transfer_t *t, uint32_t addr, size_t n, int queue_head, uint32_t primebit, int notify) {
+void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, size_t n, uint32_t primebit, int notify) {
+  /* if (endpoint == &endpoint_queue_head[0] || */
+  /*     endpoint == &endpoint_queue_head[1]) { */
+  /*   notify = 0; */
+  /* } */
+  printf_debug("usb_transfer_schedule(endpoint=%x, transfer=%x, n=%d, primebit=%d, notify=%d)\n",
+	       endpoint, t, n, primebit, notify);
     // → page 2371, “Building a transfer descriptor”
     // TODO: initialize first 7 dwords to 0
     t->next = 1;
@@ -179,48 +152,142 @@ void usb_transfer_schedule(transfer_t *t, uint32_t addr, size_t n, int queue_hea
     t->pointer4 = (addr + 0x4000) & 0xfffff000;
 
     // → page 2373, “Executing a transfer descriptor”
+
+    if (endpoint->head != NULL) {
+      printf_debug("\n  ERROR: linked list unexpectedly not empty\n\n");
+      while (1) { delay(500); };
+    }
     
     // Case 1: Link list is empty
-    endpoint_queue_head[queue_head].next = (uint32_t)t;
-    endpoint_queue_head[queue_head].status = 0;
+    endpoint->head = t;
+    endpoint->tail = t;
+    endpoint->next = (uint32_t)t;
+    endpoint->status = 0;
     // Parse a new transfer descriptor from the queue head and prepare a
     // transmit/receive buffer:
-    USB1->ENDPTPRIME |= primebit;
-    while (USB1->ENDPTPRIME);
+    USB1->ENDPTPRIME = primebit;
+    int primeattempts = 0;
+    while (!(USB1->ENDPTSTAT & primebit)) {
+      if (primeattempts++ > 10) {
+	printf_debug("\n  ERROR: too many prime attempts, aborting\n\n");
+      }
+      if (USB1->ENDPTCOMPLETE & primebit) {
+	break;
+      }
+      // retry priming:
+      USB1->ENDPTPRIME = primebit;
+    }
+}
+
+static endpoint_t *epqh(usbep_t ep, int offset)
+{
+  return endpoint_queue_head + ep*2 + offset;
 }
 
 /* Called from locked ISR. */
-void usb_packet_transmit(USBDriver *usbp, usbep_t ep, size_t n)
+void usb_packet_transmit(USBDriver *usbp, usbep_t ep, size_t n, int notify)
 {
   const USBEndpointConfig *epc = usbp->epc[ep];
   USBInEndpointState *isp = epc->in_state;
 
-  // → page 2364, “Data Phase”
-  // TODO: set up descriptor
-
   printf_debug("usb_packet_transmit(n=%d)\n", n);
-  transfer_t *t = &endpoint0_transfer_data;
-  int notify = epc->in_cb != NULL;
-  if (n == 0) {
-    t = &endpoint0_transfer_ack;
+  //   endpoint_queue_head[1].config = (64 << 16);
+  endpoint_t *endpoint = epqh(ep, QH_OFFSET_IN);
+  transfer_t *t = &isp->transfer;
+
+  if (ep == 0) {
+    endpoint_t *ep0rx = epqh(0, QH_OFFSET_OUT);
+    ep0rx->last_setup_offset = QH_OFFSET_IN;
   }
-  usb_transfer_schedule(t, (uint32_t)isp->txbuf, n, 1, USB_ENDPTPRIME_PETB(1 << ep), notify);
+  
+  usb_transfer_schedule(endpoint, t, (uint32_t)isp->txbuf, n, USB_ENDPTPRIME_PETB(1 << ep), notify);
 }
 
 /* Called from locked ISR. */
-void usb_packet_receive(USBDriver *usbp, usbep_t ep, size_t n)
+void usb_packet_receive(USBDriver *usbp, usbep_t ep, size_t n, int notify)
 {
   const USBEndpointConfig *epc = usbp->epc[ep];
   USBOutEndpointState *osp = epc->out_state;
 
   printf_debug("usb_packet_receive(n=%d)\n", n);
-  transfer_t *t = &endpoint0_transfer_data;
-  int notify = epc->out_cb != NULL;
-  if (n == 0) {
-    t = &endpoint0_transfer_ack;
+  endpoint_t *endpoint = epqh(ep, QH_OFFSET_OUT);
+  transfer_t *t = &osp->transfer;
+
+  if (ep == 0) {
+    endpoint_t *ep0rx = epqh(0, QH_OFFSET_OUT);
+    ep0rx->last_setup_offset = QH_OFFSET_OUT;
   }
-  usb_transfer_schedule(t, (uint32_t)osp->rxbuf, n, 0, USB_ENDPTPRIME_PERB(1 << ep), notify);
+  
+  usb_transfer_schedule(endpoint, t, (uint32_t)osp->rxbuf, n, USB_ENDPTPRIME_PERB(1 << ep), notify);
 }
+
+static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
+{
+  printf_debug("clear_out_queue\n");
+  
+  const USBEndpointConfig *epc = usbp->epc[ep];
+  endpoint_t *endpoint = epqh(ep, offset);
+  transfer_t *t = endpoint->head;
+  printf_debug("clear_out_queue, endpoint = %x, t = %x\n", endpoint, t);
+
+  while (t) {
+    // Check if transfer is still active or already completed:
+    int active = (t->status & 0x80U);
+    if (active) {
+      printf_debug("dtd is still active!\n");
+    } else {
+      printf_debug("dtd completed!\n");
+    }
+
+    // Advance our queue head pointer
+    if (endpoint->head == endpoint->tail) {
+      // Arrived at end of queue, set pointers to NULL
+      endpoint->head = NULL;
+      endpoint->tail = NULL;
+
+      endpoint->next = 1; // terminate
+      endpoint->status = 0;
+    } else {
+      endpoint->head = t->next;
+    }
+
+    // TODO: or check if ioc is set
+    if (endpoint->head == NULL) {
+      if (offset == QH_OFFSET_OUT) {
+	printf_debug("  clear_out_complete ep=%d (OUT)\n", ep);
+	(usbp)->receiving &= ~(1 << ep);
+	/* Endpoint Receive Complete Event */
+	/* Transfer Direction OUT */
+	if (epc->out_cb != NULL) {
+	  printf_debug("  invoking out_cb for ep %d\n", ep);
+	  _usb_isr_invoke_out_cb(usbp, ep);
+	}
+      }
+
+      if (offset == QH_OFFSET_IN) {
+	printf_debug("  clear_out_complete ep=%d (IN)\n", ep);
+	(usbp)->transmitting &= ~(1 << ep);
+	/* Endpoint Transmit Complete Event */
+	/* Transfer Direction IN */
+	if (epc->in_cb != NULL) {
+	  printf_debug("  invoking in_cb for ep %d\n", ep);
+	  _usb_isr_invoke_in_cb(usbp, ep);
+	}
+      }
+    } else {
+      printf_debug("\n  ERROR: not at end of linked list\n\n");
+    }
+
+    t->status = 0;
+
+    t = endpoint->head;
+
+    // TODO: this is where we would need to prime descriptors if we had a queue
+    // with multiple descriptors!
+    // TODO: add assertion that queue is empty
+  }
+}
+
 
 /*===========================================================================*/
 /* Driver interrupt handlers.                                                */
@@ -238,8 +305,9 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
   USBDriver *usbp = &USBD1;
   OSAL_IRQ_PROLOGUE();
 
-  printf_debug("usb interrupt handler\n");
+  printf_debug("ISR\n");
 
+  int ignore_pending_completions = 0;
   uint32_t status = USB1->USBSTS;
   USB1->USBSTS = status;
 
@@ -248,22 +316,70 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
     // Execution Order 1a: check ENDPTSETUPSTAT
     uint32_t setupstat = USB1->ENDPTSETUPSTAT;
     while (setupstat) {
-      printf_debug("  Copy and acknowledge setup buffer, setupstat=%d\n", setupstat);
-
-      for (uint8_t ep = 0; ep < 6; ep++) {
+      for (uint8_t ep = 0; ep < MIMXRT1062_USB_ENDPOINTS; ep++) {
 	const USBEndpointConfig *epc = usbp->epc[ep];
 
 	if (setupstat & USB_ENDPTSETUPSTAT_ENDPTSETUPSTAT(1 << ep)) {
-	  printf_debug("  setup stat for endpoint %d\n", ep);	  
+	  printf_debug("  setup ep=%d\n", ep);	  
 	  /* Clear receiving in the chibios state machine */
 	  (usbp)->receiving &= ~(1 << ep);
 
+	  // TODO: remember the direction of the previous setup transfer,
+	  // clear out all pending transfers in our queue,
+	  // i.e. trigger message callbacks for them
+	  endpoint_t *endpoint = epqh(ep, QH_OFFSET_OUT);
+	  clear_out_queue(usbp, ep, (int)(endpoint->last_setup_offset));
+	  
 	  /* Call SETUP function (ChibiOS core), which prepares
 	   * for send or receive and releases the buffer
 	   */
-	  _usb_isr_invoke_setup_cb(usbp, ep);
-	  // -> will call usb_lld_read_setup
-	  // -> will call e.g. usb_lld_start_in
+	  if (epc->setup_cb != NULL) {
+	    _usb_isr_invoke_setup_cb(usbp, ep);
+	    // -> will call usb_lld_read_setup
+	    // -> will call e.g. usb_lld_start_in
+
+
+
+	    // The setup phase is
+	    // followed by an optional data phase,
+	    // followed by a required status phase.
+#if 0
+	    if ((usbp->setup[0] & USB_RTYPE_DIR_MASK) == USB_RTYPE_DIR_DEV2HOST) {
+	      /* IN phase.*/
+	      if (usbp->ep0n != 0U) {
+		// trigger receiving the status packet, but without
+		// notification, and assume everything went okay
+		usbp->ep0state = USB_EP0_STP_WAITING;
+		printf_debug("-> entering USB_EP0_STP_WAITING, draining status packet\n");
+		osalSysLockFromISR();
+
+		USBOutEndpointState *osp = epc->out_state;
+		osp->rxbuf  = NULL;
+		osp->rxsize = 0;
+		osp->rxcnt  = 0;
+		usb_packet_receive(usbp, ep, osp->rxsize, 0); // never notify
+		
+		osalSysUnlockFromISR();
+	      }
+	    }
+	    else {
+	      /* OUT phase.*/
+	      endpoint->last_setup_offset = QH_OFFSET_OUT;
+	      if (usbp->ep0n != 0U) {
+		// trigger sending the status packet, but without notification,
+		// and assume everything went okay
+		usbp->ep0state = USB_EP0_STP_WAITING;
+		printf_debug("-> entering USB_EP0_STP_WAITING, sending status packet\n");
+		osalSysLockFromISR();
+		(usbp)->transmitting &= ~(1<<ep);
+		usbStartTransmitI(usbp, 0, NULL, 0);
+		osalSysUnlockFromISR();
+	      }
+	    }
+
+	    ignore_pending_completions = 1;
+#endif
+	  }
 	}
       }
 
@@ -275,33 +391,39 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
     uint32_t complete = USB1->ENDPTCOMPLETE;
     if (complete) {
       USB1->ENDPTCOMPLETE = complete;
-      printf_debug("  completion of dtd, complete = %d\n", complete);
 
-      for (uint8_t ep = 0; ep < 6; ep++) {
-	const USBEndpointConfig *epc = usbp->epc[ep];	
-	if (complete & USB_ENDPTCOMPLETE_ERCE(1 << ep)) {
-	  printf_debug("  endpoint receive complete for endpoint %d (transfer direction OUT)\n", ep);
+      for (uint8_t ep = 0; ep < MIMXRT1062_USB_ENDPOINTS; ep++) {
+	if (ep == 0 && ignore_pending_completions) {
+	  printf_debug("(ignoring any completions for ep 0)\n");
+	  continue;
+	}
+	const USBEndpointConfig *epc = usbp->epc[ep];
+	if (complete & USB_ENDPTCOMPLETE_ERCE(1 << ep)) { // bit 0 to 16
+	  printf_debug("  complete ep=%d (OUT)\n", ep);
+	  clear_out_queue(usbp, ep, QH_OFFSET_OUT);
+#if 0
 	  (usbp)->receiving &= ~(1 << ep);
 	  /* Endpoint Receive Complete Event */
 	  /* Transfer Direction OUT */
 	  if (epc->out_cb != NULL) {
-	    printf_debug("  invoking out_cb\n");	
+	    printf_debug("  invoking out_cb for ep %d\n", ep);
 	    _usb_isr_invoke_out_cb(usbp, ep);
 	  }
+#endif
 	}
 
-	if (complete & USB_ENDPTCOMPLETE_ETCE(1 << ep)) {
-	  printf_debug("  endpoint transmit complete for endpoint %d (transfer direction IN)\n", ep);	  
+	if (complete & USB_ENDPTCOMPLETE_ETCE(1 << ep)) { // bit 16 and higher
+	  printf_debug("  complete ep=%d (IN)\n", ep);
+	  clear_out_queue(usbp, ep, QH_OFFSET_IN);
+#if 0
+	  (usbp)->transmitting &= ~(1 << ep);
 	  /* Endpoint Transmit Complete Event */
 	  /* Transfer Direction IN */
-	  if (epc->out_cb != NULL) {
-	    (usbp)->transmitting &= ~1;      
-
-	    if (epc->in_cb != NULL) {
-	      printf_debug("  invoking in_cb\n");
-	      _usb_isr_invoke_in_cb(usbp, ep);
-	    }
+	  if (epc->in_cb != NULL) {
+	    printf_debug("  invoking in_cb for ep %d\n", ep);
+	    _usb_isr_invoke_in_cb(usbp, ep);
 	  }
+#endif
 	}
       }
     }
@@ -331,7 +453,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
     printf_debug("  USB Suspend Interrupt\n");
   }
 
-  printf_debug("usb interrupt done\n\n");  
+  printf_debug("end-of-ISR\n\n");  
   
   OSAL_IRQ_EPILOGUE();
 }
@@ -376,7 +498,6 @@ void usb_lld_start(USBDriver *usbp) {
 
   printf_debug("usb_lld_start() enter\n");
 
-  // TODO: enable required clocks
 #if 1 /* PJRC_CLOCKS */
   PMU->REG_3P0 = PMU_REG_3P0_OUTPUT_TRG(0x0F) |
     PMU_REG_3P0_BO_OFFSET(6) |
@@ -427,7 +548,10 @@ void usb_lld_start(USBDriver *usbp) {
   
   // → page 2351, “Device Controller Initialization”
   
-  // Set Controller Mode in the USB.USBMODE register to device mode:
+  // Set Controller Mode in the USB.USBMODE register to device mode, and disable
+  // setup lockout (old mechanism, results in USB compliance issues, unnecessary
+  // when using the setup tripwire mechanism instead (SUTW).
+  // → page 2364, “Control Endpoint Operation Model > Setup Phase”
   USB1->USBMODE = USB_USBMODE_CM(2 /* 0b10 = device controller */) |
     USB_USBMODE_SLOM(1);
 
@@ -435,6 +559,7 @@ void usb_lld_start(USBDriver *usbp) {
   // Minimum: Initialize device queue heads 0 Tx & 0 Rx
   // All Device Queue Heads for control endpoints must be initialized before the endpoint is enabled.
   memset(endpoint_queue_head, 0, sizeof(endpoint_queue_head));
+  // → page 2347, 42.5.5.1.1 Endpoint Capabilities/Characteristics
   endpoint_queue_head[0].config = (64 << 16) /* Maximum Packet Length. wMaxPacketSize */ |
 				 (1 << 15) /* Interrupt On Setup (IOS) */;
   endpoint_queue_head[1].config = (64 << 16);
@@ -469,7 +594,8 @@ void usb_lld_stop(USBDriver *usbp) {
   if (usbp->state == USB_STOP) {
 #if MIMXRT1062_USB_USE_USB1
     if (&USBD1 == usbp) {
-      printf_debug("TODO: usb_lld_stop()\n");
+      printf_debug("usb_lld_stop()\n");
+      nvicDisableVector(USB_OTG1_IRQn);
     }
 #endif /* MIMXRT1062_USB_USE_USB1 */
   }
@@ -488,7 +614,22 @@ void usb_lld_reset(USBDriver *usbp) {
 
 #if MIMXRT1062_USB_USE_USB1
       printf_debug("TODO: usb_lld_reset()\n");
-      usbp->epc[0] = &ep0config;      
+      usbp->epc[0] = &ep0config;
+
+      // → page 2354, 42.5.6.2.1, “Bus Reset”
+      
+      // Clear the setup flag:
+      uint32_t status = USB1->ENDPTSETUPSTAT;
+      USB1->ENDPTSETUPSTAT = status;
+      // Clear the endpoint complete flag:
+      status = USB1->ENDPTCOMPLETE;
+      USB1->ENDPTCOMPLETE = status;
+
+      do {
+	// Flush pending transfers
+	USB1->ENDPTFLUSH = USB_ENDPTFLUSH_FERB_MASK | USB_ENDPTFLUSH_FETB_MASK;
+      } while (USB1->ENDPTPRIME & (USB_ENDPTPRIME_PERB_MASK | USB_ENDPTPRIME_PETB_MASK));
+      
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
@@ -522,9 +663,46 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
 
   if(ep > MIMXRT1062_USB_ENDPOINTS)
     return;
-  printf_debug("TODO: usb_lld_init_endpoint()\n");
+  printf_debug("usb_lld_init_endpoint(ep=%d)\n", ep);
 
 #if MIMXRT1062_USB_USE_USB1
+  const USBEndpointConfig *epc = usbp->epc[ep];
+
+  // → page 2357, 42.5.6.3.1, Endpoint Initialization
+
+  if (epc->out_state == NULL && epc->in_state == NULL) {
+    printf_debug("  BUG: unknown endpoint type?!\n");
+    return;
+  }
+
+  uint32_t mask = 0;
+  if (epc->out_state != NULL) {
+    endpoint_t *endpoint = epqh(ep, QH_OFFSET_OUT);
+    // Set up Endpoint Queue Head (dQH)
+    endpoint->config = (epc->out_maxsize << 16);
+    endpoint->next = 1;
+    
+    /* OUT endpoint, enable OUT direction */
+    mask |= USB_ENDPTCTRL_RXE(1) |
+      USB_ENDPTCTRL_RXR(1) |
+      USB_ENDPTCTRL_RXT(epc->ep_mode);
+    printf_debug("  OUT endpoint (RX enable), mode=%d, maxsize=%d\n", epc->ep_mode, epc->out_maxsize);
+  }
+
+  if (epc->in_state != NULL) {
+    endpoint_t *endpoint = epqh(ep, QH_OFFSET_IN);
+    // Set up Endpoint Queue Head (dQH)
+    endpoint->config = (epc->in_maxsize << 16);
+    endpoint->next = 1;
+    
+    /* IN endpoint, enable IN direction */
+    mask |= USB_ENDPTCTRL_TXE(1) |
+      USB_ENDPTCTRL_TXR(1) |
+      USB_ENDPTCTRL_TXT(epc->ep_mode);
+    printf_debug("  IN endpoint (TX enable), mode=%d, maxsize=%d\n", epc->ep_mode, epc->in_maxsize);
+  }
+
+  USB1->ENDPTCTRL[ep-1] = mask;
 
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
@@ -558,9 +736,18 @@ void usb_lld_disable_endpoints(USBDriver *usbp) {
  */
 usbepstatus_t usb_lld_get_status_out(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
+  if(ep > USB_MAX_ENDPOINTS)
+    return EP_STATUS_DISABLED;
 #if MIMXRT1062_USB_USE_USB1
-  printf_debug("TODO: usb_lld_get_status_out()\n");
-  return EP_STATUS_DISABLED;
+  uint32_t ctrl = USB1->ENDPTCTRL[ep-1];
+  printf_debug("usb_lld_get_status_out(), ctrl=%d\n", ctrl);  
+  if (!(ctrl & USB_ENDPTCTRL_RXE_MASK)) {
+    return EP_STATUS_DISABLED;
+  }
+  if (ctrl & USB_ENDPTCTRL_RXS_MASK) {
+    return EP_STATUS_STALLED;
+  }
+  return EP_STATUS_ACTIVE;
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
@@ -577,12 +764,18 @@ usbepstatus_t usb_lld_get_status_out(USBDriver *usbp, usbep_t ep) {
  * @notapi
  */
 usbepstatus_t usb_lld_get_status_in(USBDriver *usbp, usbep_t ep) {
-  (void)usbp;
   if(ep > USB_MAX_ENDPOINTS)
     return EP_STATUS_DISABLED;
 #if MIMXRT1062_USB_USE_USB1
-  printf_debug("TODO: usb_lld_get_status_in()\n");  
-  return EP_STATUS_DISABLED;
+  uint32_t ctrl = USB1->ENDPTCTRL[ep-1];
+  printf_debug("usb_lld_get_status_in(), ctrl=%d\n", ctrl);  
+  if (!(ctrl & USB_ENDPTCTRL_TXE_MASK)) {
+    return EP_STATUS_DISABLED;
+  }
+  if (ctrl & USB_ENDPTCTRL_TXS_MASK) {
+    return EP_STATUS_STALLED;
+  }
+  return EP_STATUS_ACTIVE;
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
@@ -623,8 +816,9 @@ void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
     USB1->USBCMD |= USB_USBCMD_SUTW(1);
 
     // Duplicate contents of dQH.SetupBuffer:
-    s.word1 = endpoint_queue_head[0].setup0;
-    s.word2 = endpoint_queue_head[0].setup1;
+    endpoint_t *endpoint = epqh(ep, QH_OFFSET_OUT);
+    s.word1 = endpoint->setup0;
+    s.word2 = endpoint->setup1;
 
     // Repeat until Setup TripWire (SUTW) bit is set:
   } while (!(USB1->USBCMD & USB_USBCMD_SUTW_MASK));
@@ -632,6 +826,8 @@ void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
   // Clear Setup TripWire (SUTW) bit:
   USB1->USBCMD &= ~USB_USBCMD_SUTW_MASK;
 
+  // → I confirmed that the NXP stack does not do ENDPTFLUSH somewhere
+#if 0 /* This is the wrong kind of flushing, I think. */
   // Note: After receiving a new setup packet the status and/or handshake
   // phases may still be pending from a previous control sequence. Flush
   // these before linking a new status/and or handshake dTD for the most
@@ -641,11 +837,13 @@ void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
   while (USB1->ENDPTFLUSH & (USB_ENDPTFLUSH_FETB_MASK |
 			     USB_ENDPTFLUSH_FERB_MASK));
 
-  // drop pending callbacks within this interrupt on the floor:
-  // pjrc accomplishes this by setting endpoint0_notify_mask=0;
-  uint32_t complete = USB1->ENDPTCOMPLETE;
-  USB1->ENDPTCOMPLETE = complete;
-
+  usbp->receiving &= ~((uint16_t)((unsigned)1U << (unsigned)ep));
+  usbp->transmitting &= ~((uint16_t)((unsigned)1U << (unsigned)ep));
+#endif  
+  
+  printf_debug("bmRequestType = %x, bRequest = %x, wValue = %x, wIndex = %x, wLength = %x\n",
+	       s.bmRequestType, s.bRequest, s.wValue, s.wIndex, s.wLength);
+  
   // TODO(cleanup): more elegant way to copy the setup data to |buf|
   *(uint16_t *)buf = s.wRequestAndType;
   buf += 2;
@@ -666,10 +864,11 @@ void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
  * @notapi
  */
 void usb_lld_start_out(USBDriver *usbp, usbep_t ep) {
-  USBOutEndpointState *osp = usbp->epc[ep]->out_state;
+  const USBEndpointConfig *epc = usbp->epc[ep];
+  USBOutEndpointState *osp = epc->out_state;
 
-  printf_debug("usb_lld_start_out()\n");  
-  usb_packet_receive(usbp, ep, osp->rxsize);
+  printf_debug("usb_lld_start_out(ep=%d)\n", ep);
+  usb_packet_receive(usbp, ep, osp->rxsize, epc->out_cb != NULL);
 }
 
 /**
@@ -682,8 +881,10 @@ void usb_lld_start_out(USBDriver *usbp, usbep_t ep) {
  * @notapi
  */
 void usb_lld_start_in(USBDriver *usbp, usbep_t ep) {
-  printf_debug("usb_lld_start_in()\n");
-  usb_packet_transmit(usbp, ep, usbp->epc[ep]->in_state->txsize);
+  const USBEndpointConfig *epc = usbp->epc[ep];  
+  USBInEndpointState *isp = epc->in_state;
+  printf_debug("usb_lld_start_in(ep=%d)\n", ep);
+  usb_packet_transmit(usbp, ep, isp->txsize, epc->in_cb != NULL);
 }
 
 /**
@@ -696,9 +897,9 @@ void usb_lld_start_in(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_stall_out(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("TODO: usb_lld_stall_out()\n");      
+  printf_debug("usb_lld_stall_out(ep=%d)\n", ep);
 #if MIMXRT1062_USB_USE_USB1
-
+  USB1->ENDPTCTRL[ep-1] |= USB_ENDPTCTRL_RXS(1);
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
@@ -712,9 +913,10 @@ void usb_lld_stall_out(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_stall_in(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("TODO: usb_lld_stall_in()\n");        
+  printf_debug("usb_lld_stall_in(ep=%d)\n", ep);
+  
 #if MIMXRT1062_USB_USE_USB1
-
+  USB1->ENDPTCTRL[ep-1] |= USB_ENDPTCTRL_TXS(1);
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
@@ -728,9 +930,9 @@ void usb_lld_stall_in(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_clear_out(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("TODO: usb_lld_clear_out()\n");          
+  printf_debug("usb_lld_clear_out(ep=%d)\n", ep);
 #if MIMXRT1062_USB_USE_USB1
-
+  USB1->ENDPTCTRL[ep-1] &= ~USB_ENDPTCTRL_RXS_MASK;
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
@@ -744,9 +946,9 @@ void usb_lld_clear_out(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_clear_in(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("TODO: usb_lld_clear_in()\n");
+  printf_debug("usb_lld_clear_in(ep=%d)\n", ep);
 #if MIMXRT1062_USB_USE_USB1
-
+  USB1->ENDPTCTRL[ep-1] &= ~USB_ENDPTCTRL_TXS_MASK;
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 

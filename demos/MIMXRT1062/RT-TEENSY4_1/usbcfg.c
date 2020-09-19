@@ -248,16 +248,16 @@ static USBInEndpointState ep2instate;
  * @brief   EP2 initialization structure (IN only).
  */
 static const USBEndpointConfig ep2config = {
-  USB_EP_MODE_TYPE_INTR,
-  NULL,
-  sduInterruptTransmitted,
-  NULL,
-  0x0010,
-  0x0000,
-  &ep2instate,
-  NULL,
-  1,
-  NULL
+  .ep_mode = USB_EP_MODE_TYPE_INTR,
+  .setup_cb = NULL,
+  .in_cb = sduInterruptTransmitted,
+  .out_cb = NULL,
+  .in_maxsize = 0x0010,
+  .out_maxsize = 0x0000,
+  .in_state = &ep2instate,
+  .out_state = NULL,
+  .ep_buffers = 1,
+  .setup_buf = NULL
 };
 
 /*
@@ -266,6 +266,7 @@ static const USBEndpointConfig ep2config = {
 static void usb_event(USBDriver *usbp, usbevent_t event) {
   extern SerialUSBDriver SDU1;
 
+  printf_debug("usbcfg.c:usb_event(event=%d)\n", event);
   switch (event) {
   case USB_EVENT_ADDRESS:
     return;

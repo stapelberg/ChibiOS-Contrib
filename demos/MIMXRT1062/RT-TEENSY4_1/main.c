@@ -20,6 +20,7 @@
 #include "rt_test_root.h"
 #include "oslib_test_root.h"
 #include "chprintf.h"
+#include "shell.h"
 #include <string.h>
 
 #include "usbcfg.h"
@@ -39,6 +40,19 @@ static THD_FUNCTION(Thread1, arg) {
 }
 
 extern void printf_debug(const char *format, ...);
+
+
+#define SHELL_WA_SIZE   THD_WORKING_AREA_SIZE(2048)
+
+static const ShellCommand commands[] = {
+  {NULL, NULL}
+};
+
+static const ShellConfig shell_cfg1 = {
+  (BaseSequentialStream *)&SDU1,
+  commands
+};
+
 
 
 /*
@@ -99,6 +113,12 @@ int main(void) {
   //test_execute((BaseSequentialStream *)MYSERIAL, &rt_test_suite);
   //test_execute((BaseSequentialStream *)MYSERIAL, &oslib_test_suite);
   while (true) {
+    if (SDU1.config->usbp->state == USB_ACTIVE) {
+      thread_t *shelltp = chThdCreateFromHeap(NULL, SHELL_WA_SIZE,
+                                              "shell", NORMALPRIO + 1,
+                                              shellThread, (void *)&shell_cfg1);
+      chThdWait(shelltp);               /* Waiting termination.             */
+    }
     chThdSleepSeconds(1);
   }
 

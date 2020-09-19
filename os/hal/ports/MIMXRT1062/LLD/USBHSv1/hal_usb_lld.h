@@ -35,8 +35,7 @@
 /**
  * @brief   Maximum endpoint address.
  */
-// TODO: 8+8 incl. endpoint0
-#define USB_MAX_ENDPOINTS                   15
+#define USB_MAX_ENDPOINTS                   7
 
 /**
  * @brief   Status stage handling method.
@@ -117,10 +116,84 @@
 /* Driver data structures and types.                                         */
 /*===========================================================================*/
 
+
+// → page 2344, 42.5.5 “Device Data Structures”
+
+// → page 2348, 42.5.5.2 Endpoint Transfer Descriptor (dTD)
+typedef struct transfer_struct transfer_t;
+struct transfer_struct {
+  // Next dTD Pointer
+  //
+  // 1 = invalid pointer, or address of the next transfer element descriptor
+  // (aligned to a 32-byte boundary, i.e. lowest 4 bits are all zero).
+  //
+  // This is the only field that can be modified in an active dTD,
+  // but only as described in “Managing Transfers with Transfer Descriptors”.
+  uint32_t next;
+
+  // TODO: should be called |token|, not |status|
+  //
+  // IOC = Interrupt On Complete: USBINT will be set in response to the device
+  // controller (hardware) being finished with this dTD.
+  //
+  // bit 7 = active
+  // bit 6 = halted
+  // bit 5 = data buffer error
+  // bit 3 = transaction error
+  volatile uint32_t status;
+  
+  uint32_t pointer0;
+  uint32_t pointer1;
+  uint32_t pointer2;
+  uint32_t pointer3;
+  uint32_t pointer4;
+  
+  uint32_t callback_param;
+};
+
+typedef struct endpoint_struct endpoint_t;
+
+// → page 2346, “Table 42-57 Endpoint Queue Head (dQH)”
+struct endpoint_struct {
+  // → page 2347, 42.5.5.1.1 Endpoint Capabilities/Characteristics
+  uint32_t config;
+
+  // → page 2348, 42.5.5.1.3 Current dTD Pointer
+  // for use by hardware only, should not be modified.
+  uint32_t current;
+
+  // → page 2347, 42.5.5.1.1, Transfer Overlay-Endpoint Queue Head
+  // working space for the device controller
+  uint32_t next;
+  uint32_t status; // also called token in NXP stack
+  uint32_t pointer0;
+  uint32_t pointer1;
+  uint32_t pointer2;
+  uint32_t pointer3;
+  uint32_t pointer4;
+  
+  uint32_t reserved;
+
+  // → page 2348, 42.5.5.1.4 Set-up Buffer
+  uint32_t setup0;
+  uint32_t setup1;
+
+  // These extra fields make up the remainder of the 64 bytes on which Queue
+  // Heads must be aligned:
+  transfer_t *head;
+  transfer_t *tail;
+  void (*callback_function)(transfer_t *completed_transfer);
+  uint32_t last_setup_offset;
+};
+
+
 /**
  * @brief   Type of an IN endpoint state structure.
  */
 typedef struct {
+  // Must come first so that we can align the USBInEndpointState:
+  transfer_t transfer;
+  
   /**
    * @brief   Requested transmit transfer size.
    */
@@ -139,17 +212,16 @@ typedef struct {
    */
   thread_reference_t            thread;
 #endif
-  /* End of the mandatory fields.*/
-  /* */
-  bool                          odd_even;  /* ODD / EVEN */
-  /* */
-  bool                          data_bank; /* DATA0 / DATA1 */
+
 } USBInEndpointState;
 
 /**
  * @brief   Type of an OUT endpoint state structure.
  */
 typedef struct {
+  // Must come first so that we can align the USBOutEndpointState:
+  transfer_t transfer;
+  
   /**
    * @brief   Requested receive transfer size.
    */
@@ -169,14 +241,7 @@ typedef struct {
   thread_reference_t            thread;
 #endif
   /* End of the mandatory fields.*/
-  /**
-   * @brief   Number of packets to receive.
-   */
-  uint16_t                      rxpkts;
-  /* */
-  bool                          odd_even;  /* ODD / EVEN */
-  /* */
-  bool                          data_bank; /* DATA0 / DATA1 */
+
 } USBOutEndpointState;
 
 /**
