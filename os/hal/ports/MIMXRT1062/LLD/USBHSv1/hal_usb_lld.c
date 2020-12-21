@@ -163,25 +163,28 @@ void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, s
     endpoint->tail = t;
     endpoint->next = (uint32_t)t;
     endpoint->status = 0;
+    
     // Parse a new transfer descriptor from the queue head and prepare a
     // transmit/receive buffer:
-    USB1->ENDPTPRIME = primebit;
-    int primeattempts = 0;
+
+    // See 42.5.6.4.2.2 Data Phase
+    // NXP: USB_DeviceEhciTransfer()
+    USB1->ENDPTPRIME = primebit; // TODO: should this be |= instead of =?
+    int primeTimesCount = 0;
     while (!(USB1->ENDPTSTAT & primebit)) {
-      if (primeattempts++ > 10) {
-	printf_debug("\n  ERROR: too many prime attempts, aborting\n\n");
-      }
+      primeTimesCount++;
       if (USB1->ENDPTCOMPLETE & primebit) {
-	break;
+	break; // TODO: does this mean another transfer came in?
+      } else {
+	USB1->ENDPTPRIME = primebit; // retry priming
       }
-      // retry priming:
-      USB1->ENDPTPRIME = primebit;
     }
+    printf_debug("primeTimesCount=%d\n", primeTimesCount);
 }
 
 static endpoint_t *epqh(usbep_t ep, int offset)
 {
-  return endpoint_queue_head + ep*2 + offset;
+  return &(endpoint_queue_head[ep*2 + offset]);
 }
 
 /* Called from locked ISR. */
@@ -223,20 +226,20 @@ void usb_packet_receive(USBDriver *usbp, usbep_t ep, size_t n, int notify)
 
 static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
 {
-  printf_debug("clear_out_queue\n");
+  printf_debug("    clear_out_queue\n");
   
   const USBEndpointConfig *epc = usbp->epc[ep];
   endpoint_t *endpoint = epqh(ep, offset);
   transfer_t *t = endpoint->head;
-  printf_debug("clear_out_queue, endpoint = %x, t = %x\n", endpoint, t);
+  printf_debug("    clear_out_queue, endpoint = %x (offset %d), t = %x\n", endpoint, offset, t);
 
   while (t) {
     // Check if transfer is still active or already completed:
     int active = (t->status & 0x80U);
     if (active) {
-      printf_debug("dtd is still active!\n");
+      printf_debug("      dtd is still active!\n");
     } else {
-      printf_debug("dtd completed!\n");
+      printf_debug("      dtd completed!\n");
     }
 
     // Advance our queue head pointer
@@ -254,33 +257,36 @@ static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
     // TODO: or check if ioc is set
     if (endpoint->head == NULL) {
       if (offset == QH_OFFSET_OUT) {
-	printf_debug("  clear_out_complete ep=%d (OUT)\n", ep);
+	printf_debug("    clear_out_complete ep=%d (OUT)\n", ep);
 	(usbp)->receiving &= ~(1 << ep);
 	/* Endpoint Receive Complete Event */
 	/* Transfer Direction OUT */
 	if (epc->out_cb != NULL) {
-	  printf_debug("  invoking out_cb for ep %d\n", ep);
+	  printf_debug("    invoking out_cb for ep %d\n", ep);
 	  _usb_isr_invoke_out_cb(usbp, ep);
 	}
       }
 
       if (offset == QH_OFFSET_IN) {
-	printf_debug("  clear_out_complete ep=%d (IN)\n", ep);
+	printf_debug("    clear_out_complete ep=%d (IN)\n", ep);
 	(usbp)->transmitting &= ~(1 << ep);
 	/* Endpoint Transmit Complete Event */
 	/* Transfer Direction IN */
 	if (epc->in_cb != NULL) {
-	  printf_debug("  invoking in_cb for ep %d\n", ep);
+	  printf_debug("    invoking in_cb for ep %d\n", ep);
 	  _usb_isr_invoke_in_cb(usbp, ep);
 	}
       }
     } else {
-      printf_debug("\n  ERROR: not at end of linked list\n\n");
+      printf_debug("\n    ERROR: not at end of linked list\n\n");
     }
 
     t->status = 0;
 
     t = endpoint->head;
+    if (t != NULL) {
+      printf_debug("\n   ERROR: more than 1 queue entry!\n\n");
+    }
 
     // TODO: this is where we would need to prime descriptors if we had a queue
     // with multiple descriptors!
@@ -472,7 +478,7 @@ void usb_lld_init(void) {
   /* Driver initialization.*/
   usbObjectInit(&USBD1);
 
-  printf_debug("usb_lld_init()\n");  
+  printf_debug("usb_lld_init()\n");
   
 #if MIMXRT1062_USB_USE_USB1
 
@@ -559,10 +565,14 @@ void usb_lld_start(USBDriver *usbp) {
   // Minimum: Initialize device queue heads 0 Tx & 0 Rx
   // All Device Queue Heads for control endpoints must be initialized before the endpoint is enabled.
   memset(endpoint_queue_head, 0, sizeof(endpoint_queue_head));
+
   // → page 2347, 42.5.5.1.1 Endpoint Capabilities/Characteristics
+  // tamago/soc/imx6/usb sets only eqh[1] ios=1
+  // NXP sets eqh[0] ios=1 and eqh[1] ios=1
+  // PJRC sets only eqh[0] ios=1
   endpoint_queue_head[0].config = (64 << 16) /* Maximum Packet Length. wMaxPacketSize */ |
 				 (1 << 15) /* Interrupt On Setup (IOS) */;
-  endpoint_queue_head[1].config = (64 << 16);
+  endpoint_queue_head[1].config = (64 << 16) | (1 << 15);
 
   // Configure ENDPOINTLISTADDR pointer:
   USB1->ENDPTLISTADDR = (uint32_t)&endpoint_queue_head;
@@ -613,7 +623,7 @@ void usb_lld_reset(USBDriver *usbp) {
   //_usbbn = 0;
 
 #if MIMXRT1062_USB_USE_USB1
-      printf_debug("TODO: usb_lld_reset()\n");
+      printf_debug("usb_lld_reset()\n");
       usbp->epc[0] = &ep0config;
 
       // → page 2354, 42.5.6.2.1, “Bus Reset”

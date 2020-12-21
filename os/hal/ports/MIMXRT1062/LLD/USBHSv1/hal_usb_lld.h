@@ -120,6 +120,7 @@
 // → page 2344, 42.5.5 “Device Data Structures”
 
 // → page 2348, 42.5.5.2 Endpoint Transfer Descriptor (dTD)
+// NXP: usb_device_ehci_dtd_struct_t
 typedef struct transfer_struct transfer_t;
 struct transfer_struct {
   // Next dTD Pointer
@@ -154,32 +155,47 @@ struct transfer_struct {
 typedef struct endpoint_struct endpoint_t;
 
 // → page 2346, “Table 42-57 Endpoint Queue Head (dQH)”
+// NXP: usb_device_ehci_qh_struct_t
 struct endpoint_struct {
   // → page 2347, 42.5.5.1.1 Endpoint Capabilities/Characteristics
-  uint32_t config;
+  volatile uint32_t config;
 
   // → page 2348, 42.5.5.1.3 Current dTD Pointer
   // for use by hardware only, should not be modified.
-  uint32_t current;
+  // NXP: currentDtdPointer
+  volatile uint32_t current;
 
   // → page 2347, 42.5.5.1.1, Transfer Overlay-Endpoint Queue Head
   // working space for the device controller
-  uint32_t next;
-  uint32_t status; // also called token in NXP stack
-  uint32_t pointer0;
-  uint32_t pointer1;
-  uint32_t pointer2;
-  uint32_t pointer3;
-  uint32_t pointer4;
+  // NXP: nextDtdPointer
+  volatile uint32_t next;
+  // NXP: dtdToken
+  volatile uint32_t status;
+  volatile uint32_t pointer0;
+  volatile uint32_t pointer1;
+  volatile uint32_t pointer2;
+  volatile uint32_t pointer3;
+  volatile uint32_t pointer4;
   
-  uint32_t reserved;
+  volatile uint32_t reserved;
 
   // → page 2348, 42.5.5.1.4 Set-up Buffer
+  // NXP: setupBuffer
   uint32_t setup0;
   uint32_t setup1;
 
-  // These extra fields make up the remainder of the 64 bytes on which Queue
-  // Heads must be aligned:
+  // -- 48 byte consumed, need to fill 64, i.e. 4 x uint32 --
+  //
+  // 56.4.5.1 Endpoint Queue Head (dQH)
+  //
+  // The device Endpoint Queue Head (dQH) is where all transfers for a given
+  // endpoint are managed. The dQH is a 48-byte data structure, but must be
+  // aligned on 64-byte boundaries.
+  //
+  // NXP: setupBufferBack[2]
+  // NXP: endpointStatusUnion
+  // NXP: reserved2
+
   transfer_t *head;
   transfer_t *tail;
   void (*callback_function)(transfer_t *completed_transfer);
