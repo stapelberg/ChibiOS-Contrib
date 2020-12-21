@@ -216,12 +216,12 @@ static const USBDescriptor *get_descriptor(USBDriver *usbp,
 /**
  * @brief   IN EP1 state.
  */
-static USBInEndpointState ep1instate;
+static USBInEndpointState ep1instate __attribute__ ((used, aligned(32)));
 
 /**
  * @brief   OUT EP1 state.
  */
-static USBOutEndpointState ep1outstate;
+static USBOutEndpointState ep1outstate __attribute__ ((used, aligned(32)));
 
 /**
  * @brief   EP1 initialization structure (both IN and OUT).
@@ -242,7 +242,7 @@ static const USBEndpointConfig ep1config = {
 /**
  * @brief   IN EP2 state.
  */
-static USBInEndpointState ep2instate;
+static USBInEndpointState ep2instate __attribute__ ((used, aligned(32)));
 
 /**
  * @brief   EP2 initialization structure (IN only).
