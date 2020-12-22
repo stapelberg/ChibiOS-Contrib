@@ -112,8 +112,10 @@ int main(void) {
 
   //test_execute((BaseSequentialStream *)MYSERIAL, &rt_test_suite);
   //test_execute((BaseSequentialStream *)MYSERIAL, &oslib_test_suite);
+
   while (true) {
     if (SDU1.config->usbp->state == USB_ACTIVE) {
+      sdWrite(MYSERIAL, (unsigned char*)"starting shl\r\n", strlen("starting shl\r\n"));
       thread_t *shelltp = chThdCreateFromHeap(NULL, SHELL_WA_SIZE,
                                               "shell", NORMALPRIO + 1,
                                               shellThread, (void *)&shell_cfg1);

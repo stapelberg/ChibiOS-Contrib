@@ -31,7 +31,7 @@ SerialUSBDriver SDU1;
  * USB Device Descriptor.
  */
 static const uint8_t vcom_device_descriptor_data[18] = {
-  USB_DESC_DEVICE       (0x0110,        /* bcdUSB (1.1).                    */
+  USB_DESC_DEVICE       (0x0100,        /* bcdUSB (1.0 to force full speed).*/
                          0x02,          /* bDeviceClass (CDC).              */
                          0x00,          /* bDeviceSubClass.                 */
                          0x00,          /* bDeviceProtocol.                 */
@@ -227,16 +227,16 @@ static USBOutEndpointState ep1outstate __attribute__ ((used, aligned(32)));
  * @brief   EP1 initialization structure (both IN and OUT).
  */
 static const USBEndpointConfig ep1config = {
-  USB_EP_MODE_TYPE_BULK,
-  NULL,
-  sduDataTransmitted,
-  sduDataReceived,
-  0x0040,
-  0x0040,
-  &ep1instate,
-  &ep1outstate,
-  2,
-  NULL
+  .ep_mode = USB_EP_MODE_TYPE_BULK,
+  .setup_cb = NULL,
+  .in_cb = sduDataTransmitted,
+  .out_cb = sduDataReceived,
+  .in_maxsize = 0x0040,
+  .out_maxsize = 0x0040,
+  .in_state = &ep1instate,
+  .out_state = &ep1outstate,
+  .ep_buffers = 2,
+  .setup_buf = NULL
 };
 
 /**
