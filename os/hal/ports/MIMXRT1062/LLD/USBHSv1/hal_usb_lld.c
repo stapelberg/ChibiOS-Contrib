@@ -276,11 +276,12 @@ static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
     // Call event handlers and update ChibiOS USB driver state
     if (/* TODO(correctness): if ioc == 1 */ at_end_of_queue) {
       if (offset == QH_OFFSET_OUT) {
-	printf_debug("    clear_out_complete ep=%d (OUT)\n", ep);
+	printf_debug("    clear_out_complete ep=%d (OUT), rxbuf=%x\n", ep, epc->out_state->rxbuf);
 	(usbp)->receiving &= ~(1 << ep);
 
 	USBOutEndpointState *osp = epc->out_state;
 	osp->rxcnt = osp->rxsize - bytes_left;
+
 	printf_debug("    received %d bytes\n", osp->rxcnt);
 
 	/* Endpoint Receive Complete Event */
@@ -292,7 +293,7 @@ static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
       }
 
       if (offset == QH_OFFSET_IN) {
-	printf_debug("    clear_out_complete ep=%d (IN)\n", ep);
+	printf_debug("    clear_out_complete ep=%d (IN), txbuf=%x\n", ep, epc->in_state->txbuf);
 	(usbp)->transmitting &= ~(1 << ep);
 	/* Endpoint Transmit Complete Event */
 	/* Transfer Direction IN */
@@ -376,13 +377,14 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
   USBDriver *usbp = &USBD1;
   OSAL_IRQ_PROLOGUE();
 
-  printf_debug("ISR\n");
+  //printf_debug("ISR\n");
 
   uint32_t status = USB1->USBSTS;
   USB1->USBSTS = status;
 
   // → page 2375, “Servicing Interrupts”
   if (status & USB_USBSTS_UI_MASK /* token done */) {
+    printf_debug("\ntokendone\n");
     // Execution Order 1a: check ENDPTSETUPSTAT
     uint32_t setupstat = USB1->ENDPTSETUPSTAT;
     while (setupstat) {
@@ -439,6 +441,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
 	}
       }
     }
+    printf_debug("tokendone done\n\n");
   }
 
   if (status & USB_USBSTS_URI_MASK) {
@@ -470,7 +473,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
     _usb_isr_invoke_sof_cb(usbp);
   }
 
-  printf_debug("end-of-ISR\n\n");  
+  //printf_debug("end-of-ISR\n\n");  
   
   OSAL_IRQ_EPILOGUE();
 }
@@ -572,7 +575,7 @@ void usb_lld_start(USBDriver *usbp) {
   USB1->USBMODE = USB_USBMODE_CM(2 /* 0b10 = device controller */) |
     USB_USBMODE_SLOM(1);
 
-  USB1->PORTSC1 |= (1 << 24) /* Force to Full speed */;  
+  //USB1->PORTSC1 |= (1 << 24) /* Force to Full speed */;  
   
   // Allocate and Initialize device queue heads in system memory:
   // Minimum: Initialize device queue heads 0 Tx & 0 Rx
@@ -595,8 +598,8 @@ void usb_lld_start(USBDriver *usbp) {
     USB_USBINTR_UEE(1) /* USB Error Interrupt Enable */ |
     USB_USBINTR_PCE(1) /* Port Change Detect */ |
     USB_USBINTR_URE(1) /* USB Reset Received */ |
-    USB_USBINTR_SLE(1) /* Sleep Interrupt Enable */;
-  //    USB_USBINTR_SRE(1) /* Start Of Frame */;
+    USB_USBINTR_SLE(1) /* Sleep Interrupt Enable */ |
+    USB_USBINTR_SRE(1) /* Start Of Frame */;
 
   // Set Run/Stop bit to Run Mode:
   USB1->USBCMD = USB_USBCMD_RS(1 /* 0b1 = run */);
