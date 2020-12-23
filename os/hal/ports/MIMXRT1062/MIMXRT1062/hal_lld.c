@@ -750,10 +750,13 @@ void MIMXRT1062_clock_init(void) {
 
   // defined(MIMXRT1062)
 #if defined(__IMXRT1062__)
+  #error flexram
 	/* TODO: see https://www.nxp.com/docs/en/application-note/AN12077.pdf */
 	IOMUXC_GPR_GPR17 = (uint32_t)&_flexram_bank_config;
-	IOMUXC_GPR_GPR16 = 0x00200007;
-	IOMUXC_GPR_GPR14 = 0x00AA0000;
+	IOMUXC_GPR_GPR16 = 0x00200007;	// 0b001000000000000000000111
+	IOMUXC_GPR_GPR14 = 0x00AA0000;  // 0b101010100000000000000000
+	// IOMUXC_GPR_GPR14_CM7_MX6RT_CFGDTCMSZ(10 /* 512 KB */) |
+	// IOMUXC_GPR_GPR14_CM7_MX6RT_CFGITCMSZ(10 /* 512 KB */)
 	__asm__ volatile("mov sp, %0" : : "r" ((uint32_t)&_estack) : );
 #endif
 	PMU->MISC0_SET = 1<<3; //Use bandgap-based bias currents for best performance (Page 1175)
