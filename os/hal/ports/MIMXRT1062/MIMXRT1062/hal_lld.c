@@ -336,7 +336,7 @@ void configure_cache(void)
 	// TODO: check if caches already active - skip?
 
 	MPU->CTRL = 0; // turn off MPU
-#if 0
+#if 1 
 	uint32_t i = 0;
 	MPU->RBAR = 0x00000000 | REGION(i++); //https://developer.arm.com/docs/146793866/10/why-does-the-cortex-m7-initiate-axim-read-accesses-to-memory-addresses-that-do-not-fall-under-a-defined-mpu-region
 	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_4G;
