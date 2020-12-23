@@ -661,7 +661,9 @@ void usb_lld_reset(USBDriver *usbp) {
 	endpoint_t *endpoint = &(endpoint_queue_head[i]);
 	endpoint->head = NULL;
 	endpoint->tail = NULL;
-	uint32_t config = (64/*epc->out_maxsize*/ << 16);
+	//uint16_t maxsize = (i%2 == QH_OFFSET_OUT ? usbp->epc[i/2]->out_maxsize : usbp->epc[i/2]->in_maxsize);
+	uint16_t maxsize = (i == 0 || i == 1 ? 64 : 512);
+	uint32_t config = (maxsize << 16);
 	if (i == 0 || i == 1 /* endpoint 0, IN or OUT */) {
 	  config |= (1 << 15) /* Interrupt On Setup (IOS) */;
 	}

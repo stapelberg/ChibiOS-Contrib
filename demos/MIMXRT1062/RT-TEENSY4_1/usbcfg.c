@@ -121,12 +121,12 @@ static const uint8_t vcom_configuration_descriptor_data[67] = {
   /* Endpoint 1 Descriptor.*/
   USB_DESC_ENDPOINT     (USBD1_DATA_AVAILABLE_EP,       /* bEndpointAddress.*/
                          0x02,          /* bmAttributes (Bulk).             */
-                         0x0040,        /* wMaxPacketSize.                  */
+                         0x0200,        /* wMaxPacketSize.                  */
                          0x00),         /* bInterval.                       */
   /* Endpoint 1 Descriptor.*/
   USB_DESC_ENDPOINT     (USBD1_DATA_REQUEST_EP|0x80,    /* bEndpointAddress.*/
                          0x02,          /* bmAttributes (Bulk).             */
-                         0x0040,        /* wMaxPacketSize.                  */
+                         0x0200,        /* wMaxPacketSize.                  */
                          0x00)          /* bInterval.                       */
 };
 
@@ -231,8 +231,8 @@ static const USBEndpointConfig ep1config = {
   .setup_cb = NULL,
   .in_cb = sduDataTransmitted,
   .out_cb = sduDataReceived,
-  .in_maxsize = 0x0040,
-  .out_maxsize = 0x0040,
+  .in_maxsize = 0x0200,
+  .out_maxsize = 0x0200,
   .in_state = &ep1instate,
   .out_state = &ep1outstate,
   .ep_buffers = 2,
