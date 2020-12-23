@@ -40,9 +40,19 @@ MEMORY
   flash3   : org = 0x00000000, len = 0
 
   /* Possible optimization: place code marked as FASTRUN in ram0 */
-  ram0     : org = 0x00000000, len = 512k   /* ITCM, can be TCM or general purpose */
-  ram1     : org = 0x20000000, len = 512k   /* DTCM, general purpose only */
-  ram2     : org = 0x20200000, len = 512k   /* RAM, for new/malloc() and DMAMEM variables */
+  /* ram0: ITCM, can be TCM or general purpose
+     IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
+     0000_0000 Size: 512KB ITCM  */
+  ram0     : org = 0x00000000, len = 128k
+  /* ram1: DTCM, general purpose only
+     IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
+     2000_0000 Size: 512KB DTCM  */
+  ram1     : org = 0x20000000, len = 128k
+  /* ram2: OCRAM (On-Chip RAM), for new/malloc() and DMAMEM variables
+     IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
+     2020_0000 Size: 512KB OCRAM2  */
+  ram2     : org = 0x20200000, len = 512k
+
   ram3     : org = 0x00000000, len = 0
   ram4     : org = 0x00000000, len = 0
   ram5     : org = 0x00000000, len = 0
