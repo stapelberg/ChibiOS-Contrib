@@ -172,19 +172,19 @@ typedef struct {
  *          address that's zero on all Kinetis devices.
  */
 #define PAL_LINE(port, pad)                                                 \
-  ((ioline_t)((uint32_t)(port) | ((uint32_t)(pad)<<20)))
+  ((ioline_t)((uint32_t)(port) | ((uint32_t)(pad))))
 
 /**
  * @brief   Decodes a port identifier from a line identifier.
  */
 #define PAL_PORT(line)                                                      \
-  ((GPIO_TypeDef *)(((uint32_t)(line)) & 0xF00FFFFFU))
+  ((GPIO_Type *)(((uint32_t)(line)) & 0xFFFFF000U))
 
 /**
  * @brief   Decodes a pad identifier from a line identifier.
  */
 #define PAL_PAD(line)                                                       \
-  ((uint32_t)((uint32_t)(line) & 0x0FF00000U)>>20)
+  ((uint32_t)((uint32_t)(line) & 0x00000FFFU))
 
 /**
  * @brief   Value identifying an invalid line.
