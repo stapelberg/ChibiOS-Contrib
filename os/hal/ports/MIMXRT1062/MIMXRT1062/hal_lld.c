@@ -327,6 +327,10 @@ void usb_pll_start(void) {
 #define REGION(n)	(SCB_MPU_RBAR_REGION(n) | SCB_MPU_RBAR_VALID)
 
 extern unsigned long _ebss;
+extern unsigned long __main_stack_base__;
+extern unsigned long __main_stack_end__;
+extern unsigned long __process_stack_base__;
+extern unsigned long __process_stack_end__;
 
 void configure_cache(void)
 {
@@ -336,7 +340,7 @@ void configure_cache(void)
 	// TODO: check if caches already active - skip?
 
 	MPU->CTRL = 0; // turn off MPU
-#if 1 
+#if 1
 	uint32_t i = 0;
 	MPU->RBAR = 0x00000000 | REGION(i++); //https://developer.arm.com/docs/146793866/10/why-does-the-cortex-m7-initiate-axim-read-accesses-to-memory-addresses-that-do-not-fall-under-a-defined-mpu-region
 	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_4G;
@@ -355,9 +359,6 @@ void configure_cache(void)
 	MPU->RBAR = 0x20000000 | REGION(i++); // DTCM
 	MPU->RASR = MEM_NOCACHE | READWRITE | NOEXEC | SIZE_512K;
 
-	// _ebss == ADDR(.bss) + SIZEOF(.bss)
-	
-// TODO: update &_ebss with the correct symbol in ChibiOS
 	MPU->RBAR = ((uint32_t)&_ebss) | REGION(i++); // trap stack overflow
 	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_32B;
 
@@ -556,8 +557,9 @@ void reset_PFD(void) {
   CCM_ANALOG->PFD_480 = 0x13110D0C; // PFD0:720, PFD1:664, PFD2:508, PFD3:454 MHz
 }
 
-#define NVIC_NUM_INTERRUPTS 160
-extern uint32_t _vectors[NVIC_NUM_INTERRUPTS];
+// CORTEX_NUM_VECTORS
+#define NVIC_NUM_INTERRUPTS 160 
+extern uint32_t _vectors[NVIC_NUM_INTERRUPTS+16];
 
 __attribute__ ((used, aligned(1024)))
 void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
@@ -588,9 +590,17 @@ void unused_interrupt_vector(void)
          ".syntax divided\n") ;
 }
 
+#define HALT_IF_DEBUGGING()                              \
+  do {                                                   \
+    if ((*(volatile uint32_t *)0xE000EDF0) & (1 << 0)) { \
+      __asm("bkpt 1");                                   \
+    }                                                    \
+} while (0)
+
 __attribute__((weak,used))
 void HardFault_HandlerC(unsigned int *hardfault_args)
 {
+  //HALT_IF_DEBUGGING();
   volatile unsigned int nn ;
 #if 1 /* PRINT_DEBUG_STUFF*/
   volatile unsigned int stacked_r0 ;
@@ -721,7 +731,7 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
   GPIO7->DR_CLEAR = (1 << 3); //digitalWrite(13, LOW);
 
   //if ( F_CPU_ACTUAL >= 600000000 )
-    set_arm_clock(300000000);
+  //set_arm_clock(300000000);
 
   while (1)
   {
@@ -734,6 +744,96 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
   }
 }
 
+__attribute__((section(".startup"), optimize("no-tree-loop-distribute-patterns")))
+static void memory_copy(uint32_t *dest, const uint32_t *src, uint32_t *dest_end)
+{
+    if (dest == src)
+        return;
+    while (dest < dest_end)
+    {
+        *dest++ = *src++;
+    }
+}
+
+__attribute__((section(".startup"), optimize("no-tree-loop-distribute-patterns")))
+static void memory_clear(uint32_t *dest, uint32_t *dest_end)
+{
+    while (dest < dest_end)
+    {
+        *dest++ = 0;
+    }
+}
+
+// from the linker
+extern unsigned long _stextload;
+extern unsigned long _stext;
+extern unsigned long _etext;
+extern unsigned long _sdataload;
+extern unsigned long _sdata;
+extern unsigned long _edata;
+extern unsigned long _sbss;
+extern unsigned long _ebss;
+extern unsigned long _flexram_bank_config;
+extern unsigned long _estack;
+
+extern void main(void);
+
+// ARM SysTick is used for most Ardiuno timing functions, delay(), millis(),
+// micros().  SysTick can run from either the ARM core clock, or from an
+// "external" clock.  NXP documents it as "24 MHz XTALOSC can be the external
+// clock source of SYSTICK" (RT1052 ref manual, rev 1, page 411).  However,
+// NXP actually hid an undocumented divide-by-240 circuit in the hardware, so
+// the external clock is really 100 kHz.  We use this clock rather than the
+// ARM clock, to allow SysTick to maintain correct timing even when we change
+// the ARM clock to run at different speeds.
+#define SYSTICK_EXT_FREQ 100000
+
+volatile uint32_t systick_millis_count;
+volatile uint32_t systick_cycle_count;
+uint32_t systick_safe_read; // micros() synchronization
+
+void systick_isr(void)
+{
+        systick_cycle_count = DWT->CYCCNT;
+        systick_millis_count++;
+}
+
+void pendablesrvreq_isr(void)
+{
+}
+
+#define SYST_CSR                (*(volatile uint32_t *)0xE000E010) // SysTick Control and Status
+#define SYST_CSR_COUNTFLAG              ((uint32_t)(1<<16))
+#define SYST_CSR_CLKSOURCE              ((uint32_t)(1<<2))
+#define SYST_CSR_TICKINT                ((uint32_t)(1<<1))
+#define SYST_CSR_ENABLE                 ((uint32_t)(1<<0))
+#define SYST_RVR                (*(volatile uint32_t *)0xE000E014) // SysTick Reload Value Register
+#define SYST_CVR                (*(volatile uint32_t *)0xE000E018) // SysTick Current Value Register
+#define SYST_CALIB              (*(const    uint32_t *)0xE000E01C) // SysTick Calibration Value
+#define SCB_SHPR3               (*(volatile uint32_t *)0xE000ED20) // System Handler Priority 3
+
+extern void PendSV_Handler(void);
+extern void SVC_Handler(void);
+
+extern volatile uint32_t systick_cycle_count;
+static void configure_systick(void)
+{
+  _VectorsRam[11] = SVC_Handler;
+  _VectorsRam[14] = PendSV_Handler;
+        SCB_SHPR3 = 0x20200000;  // Systick, pendablesrvreq_isr = priority 32;
+  return;
+        _VectorsRam[14] = pendablesrvreq_isr;
+        _VectorsRam[15] = systick_isr;
+        SYST_RVR = (SYSTICK_EXT_FREQ / 1000) - 1;
+        SYST_CVR = 0;
+        SYST_CSR = SYST_CSR_TICKINT | SYST_CSR_ENABLE;
+        SCB_SHPR3 = 0x20200000;  // Systick, pendablesrvreq_isr = priority 32;
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;// turn on cycle counter
+        systick_cycle_count = DWT->CYCCNT; // compiled 0, corrected w/1st systick
+}
+
+
 
 /**
  * @brief   MIMXRT1062 clock initialization.
@@ -745,12 +845,164 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
  *
  * @special
  */
+__attribute__((section(".startup"), optimize("no-tree-loop-distribute-patterns"), naked))
+void ResetHandler(void) {
+  	unsigned int i;
+
+#define NVIC_SET_PRIORITY(irqnum, priority)  (*((volatile uint8_t *)0xE000E400 + (irqnum)) = (uint8_t)(priority))
+#if 1
+	IOMUXC_GPR->GPR17 = (uint32_t)&_flexram_bank_config;
+	IOMUXC_GPR->GPR16 = 0x00200007;
+	IOMUXC_GPR->GPR14 = 0x00AA0000;
+	__asm__ volatile("mov sp, %0" : : "r" ((uint32_t)&_estack) : );
+#endif
+
+	// Set up separate MSP/PSP for ChibiOS
+	// https://interrupt.memfault.com/blog/cortex-m-rtos-context-switching
+	//asm volatile("msr msp, %0" : : "r" ((uint32_t)&__main_stack_end__) : );
+	//asm volatile("msr psp, %0" : : "r" ((uint32_t)&__process_stack_end__) : );
+	asm volatile("msr msp, %0" : : "r" (((uint32_t)&_estack)-4096) : );
+	asm volatile("msr psp, %0" : : "r" ((uint32_t)&_estack) : );
+
+#define CONTROL_MODE_PRIVILEGED             0
+#define CONTROL_MODE_UNPRIVILEGED           1
+#define CONTROL_USE_MSP                     0
+#define CONTROL_USE_PSP                     2
+#define CONTROL_FPCA                        4
+
+	asm volatile("msr CONTROL, %0\nisb" : : "r" ((CONTROL_USE_PSP | CONTROL_MODE_PRIVILEGED)) : );
+
+	PMU->MISC0_SET = 1<<3; //Use bandgap-based bias currents for best performance (Page 1175)
+	// pin 13 - if startup crashes, use this to turn on the LED early for troubleshooting
+	IOMUXC->SW_MUX_CTL_PAD[kIOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03] = 5;
+	IOMUXC->SW_PAD_CTL_PAD[kIOMUXC_SW_PAD_CTL_PAD_GPIO_B0_03] = IOMUXC_SW_PAD_CTL_PAD_DSE(7);
+	IOMUXC_GPR->GPR27 = 0xFFFFFFFF;
+	GPIO7->GDIR |= (1<<3);
+	GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
+
+	// Initialize memory
+	memory_copy(&_stext, &_stextload, &_etext);
+	memory_copy(&_sdata, &_sdataload, &_edata);
+	memory_clear(&_sbss, &_ebss);
+
+	// enable FPU
+	SCB->CPACR = 0x00F00000;
+
+	// set up blank interrupt & exception vector table
+	for (i=0; i < NVIC_NUM_INTERRUPTS + 16; i++) _VectorsRam[i] = &unused_interrupt_vector;
+	for (i=0; i < NVIC_NUM_INTERRUPTS; i++) NVIC_SET_PRIORITY(i, 128);
+	//	for (i=0; i < NVIC_NUM_INTERRUPTS; i++) nvicSetSystemHandlerPriority(i, 128);
+	SCB->VTOR = (uint32_t)_VectorsRam; // 20002400
+	//SCB->VTOR = _vectors;
+
+
+	reset_PFD();
+	
+	// Configure clocks
+	// TODO: make sure all affected peripherals are turned off!
+	// PIT & GPT timers to run from 24 MHz clock (independent of CPU speed)
+	CCM->CSCMR1 = (CCM->CSCMR1 & ~CCM_CSCMR1_PERCLK_PODF(0x3F)) | CCM_CSCMR1_PERCLK_CLK_SEL_MASK;
+	// UARTs run from 24 MHz clock (works if PLL3 off or bypassed)
+	CCM->CSCDR1 = (CCM->CSCDR1 & ~CCM_CSCDR1_UART_CLK_PODF(0x3F)) | CCM_CSCDR1_UART_CLK_SEL_MASK;
+
+#if 1
+	// Use fast GPIO6, GPIO7, GPIO8, GPIO9
+	IOMUXC_GPR->GPR26 = 0xFFFFFFFF;
+	IOMUXC_GPR->GPR27 = 0xFFFFFFFF;
+	IOMUXC_GPR->GPR28 = 0xFFFFFFFF;
+	IOMUXC_GPR->GPR29 = 0xFFFFFFFF;
+#endif
+
+	// must enable PRINT_DEBUG_STUFF in debug/print.h
+	printf_debug_init();
+	#define printf printf_debug
+	printf("\n***********IMXRT Startup**********\n");
+	printf("test %d %d %d\n", 1, -1234567, 3);
+	printf_debug("SCB->VTOR = %8x\n", SCB->VTOR); // 20002400
+	printf_debug("main_stack_base = %x\n", &__main_stack_base__);
+	printf_debug("main_stack_end = %x\n", &__main_stack_end__);
+	printf_debug("process_stack_base = %x\n", &__process_stack_base__);
+	printf_debug("process_stack_end = %x\n", &__process_stack_end__);
+	printf_debug("estack = %x\n", &_estack);
+	configure_cache();
+	configure_systick();
+	//printf("cyccnt = %d\n", DWT->CYCCNT);
+
+#if 0 /* LED_HACK */
+  for (;;) {
+    GPIO7_DR_SET = (1<<3); // digitalWrite(13, HIGH);
+    delay(1000); // 1s
+	printf("cyccnt = %d\n", DWT->CYCCNT);
+    GPIO7_DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
+    delay(1000); // 1s
+  }
+#endif /* LED_HACK */
+
+	usb_pll_start();	
+	reset_PFD(); //TODO: is this really needed?
+	set_arm_clock(600000000);
+
+	asm volatile("nop\n nop\n nop\n nop": : :"memory"); // why oh why?
+
+
+#if 0 /* LED_HACK */
+  for (;;) {
+    GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
+    delay(600000000); // 1s
+    GPIO7->DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
+    delay(600000000); // 1s
+  }
+#endif /* LED_HACK */
+
+  // TODO: do we need this?
+#if 1
+	// Undo PIT timer usage by ROM startup
+#define CCM_CCGR_ON 3
+
+#define CCM_CCGR1_PIT(n) ((uint32_t)(((n)&0x03) << 12))
+
+	CCM->CCGR1 |= CCM_CCGR1_PIT(CCM_CCGR_ON);
+	PIT->MCR = 0;
+	PIT->CHANNEL[0].TCTRL = 0;
+	PIT->CHANNEL[1].TCTRL = 0;
+	PIT->CHANNEL[2].TCTRL = 0;
+	PIT->CHANNEL[3].TCTRL = 0;
+#endif
+
+	// TODO: do we need this?
+	//printf("before C++ constructors\n");
+	//__libc_init_array();
+	//printf("after C++ constructors\n");
+	//printf("before setup\n");
+#if 0 /* LED_HACK */
+  for (;;) {
+    GPIO7_DR_SET = (1<<3); // digitalWrite(13, HIGH);
+    delay(1000); // 1s
+	printf("cyccnt = %d\n", ARM_DWT_CYCCNT);
+    GPIO7_DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
+    delay(1000); // 1s
+  }
+#endif /* LED_HACK */
+
+
+	main();
+  #if 1 /* LED_HACK */
+  for (;;) {
+    GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
+    delay(600000000); // 1s
+    GPIO7->DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
+    delay(600000000); // 1s
+  }
+#endif /* LED_HACK */
+
+	while (1) {}
+}
+#if 0
 void MIMXRT1062_clock_init(void) {
   //unsigned int i;
 
   // defined(MIMXRT1062)
-#if defined(__IMXRT1062__)
-  #error flexram
+#if 1
 	/* TODO: see https://www.nxp.com/docs/en/application-note/AN12077.pdf */
 	IOMUXC_GPR_GPR17 = (uint32_t)&_flexram_bank_config;
 	IOMUXC_GPR_GPR16 = 0x00200007;	// 0b001000000000000000000111
@@ -770,20 +1022,23 @@ void MIMXRT1062_clock_init(void) {
 
 	// In ChibiOS, memory set up happens after the clock initialization:
 	// https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L256
+	    memory_copy(&_stext, &_stextload, &_etext);
+	    memory_copy(&_sdata, &_sdataload, &_edata);
+	    memory_clear(&_sbss, &_ebss);
+
 
 	// In ChibiOS, the FPU is enabled conditionally at
 	// https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L209
 
-#define NVIC_SET_PRIORITY(irqnum, priority)  (*((volatile uint8_t *)0xE000E400 + (irqnum)) = (uint8_t)(priority))
 
 	// teensy4/startup.c copies the vector table into RAM here.
 	// We don’t need that, as we don’t modify the vector table at runtime.
 	
 	// TODO: set up interrupts, or add reference to where ChibiOS does it
-	//for (i=0; i < NVIC_NUM_INTERRUPTS + 16; i++) _VectorsRam[i] = &unused_interrupt_vector;
-	//for (i=0; i < NVIC_NUM_INTERRUPTS; i++) NVIC_SET_PRIORITY(i, 128);
-	//for (i=0; i < NVIC_NUM_INTERRUPTS; i++) nvicSetSystemHandlerPriority(i, 128);
-	//SCB->VTOR = (uint32_t)_VectorsRam;
+	for (i=0; i < NVIC_NUM_INTERRUPTS + 16; i++) _VectorsRam[i] = &unused_interrupt_vector;
+	for (i=0; i < NVIC_NUM_INTERRUPTS; i++) NVIC_SET_PRIORITY(i, 128);
+	for (i=0; i < NVIC_NUM_INTERRUPTS; i++) nvicSetSystemHandlerPriority(i, 128);
+	SCB->VTOR = (uint32_t)_VectorsRam;
 
 	reset_PFD();
 
@@ -808,7 +1063,7 @@ void MIMXRT1062_clock_init(void) {
 	configure_cache();
 	
 	// TODO: should be done by ChibiOS-Contrib/os/hal/ports/MIMXRT1062/LLD/PITv1/hal_st_lld.c i guess?	
-	//configure_systick();
+	configure_systick();
 
 #if 0
 	for (int c = 0; c < 1; c++) {
@@ -836,16 +1091,20 @@ void MIMXRT1062_clock_init(void) {
 	}
 #endif	
 }
+#endif
 
-extern void Reset_Handler(void);
 extern unsigned long _flashimagelen;
 
-__attribute__ ((section(".vectors"), used))
+// IMXRT1060RM: 9.5.5 Exception handling
+// A minimal vector table with only the first 2 elements
+__attribute__ ((section(".vectors"), used, aligned(1024)))
 const uint32_t vector_table[2] = {
+  // initial SP (stack pointer) value when booting:
 #if 1 // defined(__IMXRT1062__)
 	0x20010000, // 64K DTCM for boot, ResetHandler configures stack after ITCM/DTCM setup
 #endif
-	(uint32_t)&Reset_Handler
+	// initial PC (program count) value when booting:
+	(uint32_t)&ResetHandler
 };
 
 /* See section 2.5.2 in https://www.nxp.com/docs/en/application-note/AN12107.pdf */
