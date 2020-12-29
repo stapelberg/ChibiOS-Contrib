@@ -135,11 +135,16 @@ static void delay(const uint32_t cycles) {
 }
 
 void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, size_t n, uint32_t primebit, int notify) {
-  /* if (endpoint == &endpoint_queue_head[0] || */
-  /*     endpoint == &endpoint_queue_head[1]) { */
-  /*   notify = 0; */
-  /* } */
-  printf_debug("    usb_transfer_schedule(endpoint=%x, transfer=%x, n=%d, primebit=%d, notify=%d)\n",
+    if ((uint32_t)t % 32 != 0) {
+      printf_debug("\n  ERROR: transfer not memory-aligned\n\n");
+      while (1) { delay(500); };
+    }
+  
+    // The buffer associated with this transfer must be virtually contiguous. The
+    // buffer may start on any byte boundary; however, for optimal utilization of
+    // on-chip busses it is recommended to align the buffers on a 32-byte boundary
+
+    printf_debug("    usb_transfer_schedule(endpoint=%x, transfer=%x, n=%d, primebit=%d, notify=%d)\n",
 	       endpoint, t, n, primebit, notify);
     // → page 2371, “Building a transfer descriptor”
     // TODO: initialize first 7 dwords to 0
@@ -151,19 +156,20 @@ void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, s
     t->pointer3 = (addr + 0x3000) & 0xfffff000;
     t->pointer4 = (addr + 0x4000) & 0xfffff000;
 
+
     // → page 2373, “Executing a transfer descriptor”
 
     if (endpoint->head != NULL) {
       printf_debug("\n  ERROR: linked list unexpectedly not empty\n\n");
       while (1) { delay(500); };
     }
-    
+
     // Case 1: Link list is empty
     endpoint->head = t;
     endpoint->tail = t;
     endpoint->next = (uint32_t)t;
     endpoint->status = 0;
-    
+
     // Parse a new transfer descriptor from the queue head and prepare a
     // transmit/receive buffer:
 
@@ -236,7 +242,7 @@ void usb_packet_receive(USBDriver *usbp, usbep_t ep, size_t n, int notify)
 static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
 {
   printf_debug("    clear_out_queue(ep=%d)\n", ep);
-  
+
   const USBEndpointConfig *epc = usbp->epc[ep];
   endpoint_t *endpoint = epqh(ep, offset);
   transfer_t *t = endpoint->head;
@@ -328,7 +334,7 @@ static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
 static void cancel_control_pipe(USBDriver *usbp, usbep_t ep, int offset)
 {
   printf_debug("    cancel_control_pipe(ep=%d, offset=%d)\n", ep, offset);
-  
+
   const USBEndpointConfig *epc = usbp->epc[ep];
   endpoint_t *endpoint = epqh(ep, offset);
   transfer_t *currentDtd = endpoint->head;
@@ -448,7 +454,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
     printf_debug("  USB reset interrupt\n");
     _usb_reset(usbp);
   }
-  
+
   if (status & USB_USBSTS_PCI_MASK) {
     printf_debug("  Port Change Interrupt\n");
     if (!(USB1->PORTSC1 & USB_PORTSC1_PR_MASK)) {
@@ -459,7 +465,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
       }
     }
   }
-  
+
   if (status & USB_USBSTS_UEI_MASK) {
     printf_debug("  USB Error Interrupt\n");
   }
@@ -473,8 +479,8 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB_IRQ_VECTOR) {
     _usb_isr_invoke_sof_cb(usbp);
   }
 
-  //printf_debug("end-of-ISR\n\n");  
-  
+  //printf_debug("end-of-ISR\n\n");
+
   OSAL_IRQ_EPILOGUE();
 }
 #endif /* MIMXRT1062_USB_USE_USB1 */
@@ -493,11 +499,17 @@ void usb_lld_init(void) {
   usbObjectInit(&USBD1);
 
   printf_debug("usb_lld_init()\n");
-  
+
 #if MIMXRT1062_USB_USE_USB1
 
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
+
+#define NVIC_NUM_INTERRUPTS 160 //CORTEX_NUM_VECTORS
+extern void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
+static inline void attachInterruptVector(int irq, void (*function)(void)) __attribute__((always_inline, unused));
+static inline void attachInterruptVector(int irq, void (*function)(void)) { _VectorsRam[irq + 16] = function; asm volatile("": : :"memory"); }
+
 
 /**
  * @brief   Configures and activates the USB peripheral.
@@ -508,9 +520,10 @@ void usb_lld_init(void) {
  */
 void usb_lld_start(USBDriver *usbp) {
   if (usbp->state != USB_STOP) {
+      printf_debug("already started!\n");
     return; // already started
   }
-  
+
 #if MIMXRT1062_USB_USE_USB1
   if (usbp != &USBD1) {
     return; // unknown usbp
@@ -522,12 +535,12 @@ void usb_lld_start(USBDriver *usbp) {
   PMU->REG_3P0 = PMU_REG_3P0_OUTPUT_TRG(0x0F) |
     PMU_REG_3P0_BO_OFFSET(6) |
     PMU_REG_3P0_ENABLE_LINREG(1);
-  
+
   //usb_init_serialnumber();
-  
+
   // assume PLL3 is already running - already done by usb_pll_start() in hal_lld.c
   CCM->CCGR6 |= CCM_CCGR6_CG0(1) /* usboh3 clock */;
-  
+
   printf_debug("BURSTSIZE=%08lX\n", USB1->BURSTSIZE);
   //USB1_BURSTSIZE = USB_BURSTSIZE_TXPBURST(4) | USB_BURSTSIZE_RXPBURST(4);
   USB1->BURSTSIZE = 0x0404;
@@ -547,16 +560,14 @@ void usb_lld_start(USBDriver *usbp) {
     // USB controller is turned on from previous use
     // reset needed to turn it off & start from clean slate
     // → page 3292, “USBPHY1_CTRL”
-    USBPHY1->CTRL_SET = USBPHY_CTRL_SFTRST(1); 
+    USBPHY1->CTRL_SET = USBPHY_CTRL_SFTRST(1);
     USB1->USBCMD |= USB_USBCMD_RST(1); // reset controller
-    
+
     int count=0;
     while (USB1->USBCMD & USB_USBCMD_RST_MASK) count++;
-    
-    nvicEnableVector(USB_OTG1_IRQn, MIMXRT1062_USB_USB1_IRQ_PRIORITY);
-    
+
     USBPHY1->CTRL_CLR = USBPHY_CTRL_SFTRST(1); // reset PHY
-    
+
     printf_debug("USB reset took %d loops\n", count);
     delay(25);
   }
@@ -565,9 +576,9 @@ void usb_lld_start(USBDriver *usbp) {
   // TODO(docs): add a reference to the USBPHY1 initialization procedure
   USBPHY1->CTRL_CLR = USBPHY_CTRL_CLKGATE(1);
   USBPHY1->PWD = 0;
-  
+
   // → page 2351, “Device Controller Initialization”
-  
+
   // Set Controller Mode in the USB.USBMODE register to device mode, and disable
   // setup lockout (old mechanism, results in USB compliance issues, unnecessary
   // when using the setup tripwire mechanism instead (SUTW).
@@ -575,8 +586,8 @@ void usb_lld_start(USBDriver *usbp) {
   USB1->USBMODE = USB_USBMODE_CM(2 /* 0b10 = device controller */) |
     USB_USBMODE_SLOM(1);
 
-  //USB1->PORTSC1 |= (1 << 24) /* Force to Full speed */;  
-  
+  //USB1->PORTSC1 |= (1 << 24) /* Force to Full speed */;
+
   // Allocate and Initialize device queue heads in system memory:
   // Minimum: Initialize device queue heads 0 Tx & 0 Rx
   // All Device Queue Heads for control endpoints must be initialized before the endpoint is enabled.
@@ -600,6 +611,18 @@ void usb_lld_start(USBDriver *usbp) {
     USB_USBINTR_URE(1) /* USB Reset Received */ |
     USB_USBINTR_SLE(1) /* Sleep Interrupt Enable */ |
     USB_USBINTR_SRE(1) /* Start Of Frame */;
+
+  attachInterruptVector(USB_OTG1_IRQn, &Vector204);
+  #define NVIC_ISER0              (*(volatile uint32_t *)0xE000E100)
+#define NVIC_ISER1              (*(volatile uint32_t *)0xE000E104)
+#define NVIC_ISER2              (*(volatile uint32_t *)0xE000E108)
+#define NVIC_ISER3              (*(volatile uint32_t *)0xE000E10C)
+#define NVIC_ISER4              (*(volatile uint32_t *)0xE000E110)
+
+#define NVIC_ENABLE_IRQ(n)      (*(&NVIC_ISER0 + ((n) >> 5)) = (1 << ((n) & 31)))
+
+  NVIC_ENABLE_IRQ(USB_OTG1_IRQn);
+  //nvicEnableVector(USB_OTG1_IRQn, MIMXRT1062_USB_USB1_IRQ_PRIORITY);
 
   // Set Run/Stop bit to Run Mode:
   USB1->USBCMD = USB_USBCMD_RS(1 /* 0b1 = run */);
@@ -644,7 +667,7 @@ void usb_lld_reset(USBDriver *usbp) {
       usbp->epc[0] = &ep0config;
 
       // → page 2354, 42.5.6.2.1, “Bus Reset”
-      
+
       // Clear the setup flag:
       uint32_t status = USB1->ENDPTSETUPSTAT;
       USB1->ENDPTSETUPSTAT = status;
@@ -671,7 +694,7 @@ void usb_lld_reset(USBDriver *usbp) {
 	endpoint->config = config;
 	endpoint->next = 1;
       }
-      
+
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
@@ -723,7 +746,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
     // Set up Endpoint Queue Head (dQH)
     endpoint->config = (epc->out_maxsize << 16) | (1 << 29) /* disable automatic zlt */;
     endpoint->next = 1;
-    
+
     /* OUT endpoint, enable OUT direction */
     mask |= USB_ENDPTCTRL_RXE(1) |
       USB_ENDPTCTRL_RXR(1) |
@@ -736,7 +759,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
     // Set up Endpoint Queue Head (dQH)
     endpoint->config = (epc->in_maxsize << 16)  | (1 << 29) /* disable automatic zlt */;;
     endpoint->next = 1;
-    
+
     /* IN endpoint, enable IN direction */
     mask |= USB_ENDPTCTRL_TXE(1) |
       USB_ENDPTCTRL_TXR(1) |
@@ -759,7 +782,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
 void usb_lld_disable_endpoints(USBDriver *usbp) {
   (void)usbp;
   uint8_t i;
-  printf_debug("TODO: usb_lld_disable_endpoints()\n");  
+  printf_debug("TODO: usb_lld_disable_endpoints()\n");
 #if MIMXRT1062_USB_USE_USB1
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
@@ -782,7 +805,7 @@ usbepstatus_t usb_lld_get_status_out(USBDriver *usbp, usbep_t ep) {
     return EP_STATUS_DISABLED;
 #if MIMXRT1062_USB_USE_USB1
   uint32_t ctrl = USB1->ENDPTCTRL[ep-1];
-  printf_debug("usb_lld_get_status_out(), ctrl=%d\n", ctrl);  
+  printf_debug("usb_lld_get_status_out(), ctrl=%d\n", ctrl);
   if (!(ctrl & USB_ENDPTCTRL_RXE_MASK)) {
     return EP_STATUS_DISABLED;
   }
@@ -810,7 +833,7 @@ usbepstatus_t usb_lld_get_status_in(USBDriver *usbp, usbep_t ep) {
     return EP_STATUS_DISABLED;
 #if MIMXRT1062_USB_USE_USB1
   uint32_t ctrl = USB1->ENDPTCTRL[ep-1];
-  printf_debug("usb_lld_get_status_in(), ctrl=%d\n", ctrl);  
+  printf_debug("usb_lld_get_status_in(), ctrl=%d\n", ctrl);
   if (!(ctrl & USB_ENDPTCTRL_TXE_MASK)) {
     return EP_STATUS_DISABLED;
   }
@@ -840,7 +863,7 @@ void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
   USBOutEndpointState *os = usbp->epc[ep]->out_state;
 
   printf_debug("usb_lld_read_setup\n");
-  
+
   uint32_t setupstat = USB1->ENDPTSETUPSTAT;
   if (!setupstat) {
     return; // ENDPTSETUPSTAT unexpectedly cleared?!
@@ -881,11 +904,11 @@ void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
 
   usbp->receiving &= ~((uint16_t)((unsigned)1U << (unsigned)ep));
   usbp->transmitting &= ~((uint16_t)((unsigned)1U << (unsigned)ep));
-#endif  
-  
+#endif
+
   printf_debug("bmRequestType = %x, bRequest = %x, wValue = %x, wIndex = %x, wLength = %x\n",
 	       s.bmRequestType, s.bRequest, s.wValue, s.wIndex, s.wLength);
-  
+
   // TODO(cleanup): more elegant way to copy the setup data to |buf|
   *(uint16_t *)buf = s.wRequestAndType;
   buf += 2;
@@ -928,7 +951,7 @@ void usb_lld_start_out(USBDriver *usbp, usbep_t ep) {
  * @notapi
  */
 void usb_lld_start_in(USBDriver *usbp, usbep_t ep) {
-  const USBEndpointConfig *epc = usbp->epc[ep];  
+  const USBEndpointConfig *epc = usbp->epc[ep];
   USBInEndpointState *isp = epc->in_state;
   printf_debug("  usb_lld_start_in(ep=%d) (transmit)\n", ep);
 
@@ -968,7 +991,7 @@ void usb_lld_stall_out(USBDriver *usbp, usbep_t ep) {
 void usb_lld_stall_in(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
   printf_debug("usb_lld_stall_in(ep=%d)\n", ep);
-  
+
 #if MIMXRT1062_USB_USE_USB1
   USB1->ENDPTCTRL[ep-1] |= USB_ENDPTCTRL_TXS(1);
 #endif /* MIMXRT1062_USB_USE_USB1 */
