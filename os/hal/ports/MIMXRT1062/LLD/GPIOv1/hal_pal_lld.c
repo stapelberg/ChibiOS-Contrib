@@ -39,7 +39,7 @@
 /* Driver local variables and types.                                         */
 /*===========================================================================*/
 
-static uint8_t bit_by_index[] =
+uint8_t bit_by_index[] =
   {
    TEENSY_PIN0_BIT,
    TEENSY_PIN1_BIT,
@@ -236,8 +236,10 @@ uint8_t SW_PAD_CTL_PAD_by_index[] =
  */
 uint8_t _pal_lld_readpad(ioportid_t port,
                          uint8_t pad) {
+  uint8_t res = (port->DR & ((uint32_t) 1 << bit_by_index[pad])) ? PAL_HIGH : PAL_LOW;
+//printf_debug("\npal_lld_readpad(port=%x, pad=%d) = %d (fixed = %d)\n", port, pad, res, port->PSR & ((uint32_t)1 << bit_by_index[pad]));
 
-  return (port->DR & ((uint32_t) 1 << bit_by_index[pad])) ? PAL_HIGH : PAL_LOW;
+  return res;
 }
 
 /**
@@ -258,7 +260,7 @@ uint8_t _pal_lld_readpad(ioportid_t port,
 void _pal_lld_writepad(ioportid_t port,
                        uint8_t pad,
                        uint8_t bit) {
-
+  //printf_debug("\npal_lld_writepad(port=%x, pad=%d, bit=%d)\n", port, pad, bit);
   if (bit == PAL_HIGH)
     port->DR_SET = ((uint32_t) 1 << bit_by_index[pad]);
   else
@@ -293,32 +295,41 @@ void _pal_lld_togglepad(ioportid_t port,
 void _pal_lld_setpadmode(ioportid_t port,
                          uint8_t pad,
                          iomode_t mode) {
-
+  // 42000000 IMXRT_GPIO6
+  //printf_debug("pal_lld_setpadmode(port=%x, pad=%d, mode=%d)\n", port, pad, mode);
   osalDbgAssert(pad < PADS_PER_PORT, "pal_lld_setpadmode() #1, invalid pad");
 
-  if (mode == PAL_MODE_OUTPUT_PUSHPULL)
-    port->GDIR |= ((uint32_t) 1 << pad);
-  else
-    port->GDIR &= ~((uint32_t) 1 << pad);
+// see IMXRT1060RM Section 12.4.3 GPIO programming
+
+// Interrupt Mask Register (IMR)
+    port->IMR &= ~((uint32_t) 1 << bit_by_index[pad]);
+
+
+// All GPIOs are on mode ALT5 as per Chapter 10, External Signals and Pin Multiplexing, Table 10-1
+    const int altMode = 5;
 
   switch (mode) {
   case PAL_MODE_RESET:
   case PAL_MODE_INPUT:
   case PAL_MODE_OUTPUT_PUSHPULL:
     IOMUXC->SW_MUX_CTL_PAD[SW_MUX_CTL_PAD_by_index[pad]] =
-      PIN_MUX_ALTERNATIVE(1);
+      PIN_MUX_ALTERNATIVE(altMode);
+    // need to always set PAD_CTL in case the pin was configured as input before
+    IOMUXC->SW_PAD_CTL_PAD[SW_PAD_CTL_PAD_by_index[pad]] =
+        IOMUXC_SW_PAD_CTL_PAD_DSE(6);
+    //IOMUXC->SW_PAD_CTL_PAD[SW_PAD_CTL_PAD_by_index[pad]] = 0;
     break;
 
   case PAL_MODE_OUTPUT_OPENDRAIN:
     IOMUXC->SW_MUX_CTL_PAD[SW_MUX_CTL_PAD_by_index[pad]] =
-      PIN_MUX_ALTERNATIVE(1);
+      PIN_MUX_ALTERNATIVE(altMode);
     IOMUXC->SW_PAD_CTL_PAD[SW_PAD_CTL_PAD_by_index[pad]] =
       IOMUXC_SW_PAD_CTL_PAD_ODE(1); /* Open Drain Enable */
     break;
 
   case PAL_MODE_INPUT_PULLUP:
     IOMUXC->SW_MUX_CTL_PAD[SW_MUX_CTL_PAD_by_index[pad]] =
-      PIN_MUX_ALTERNATIVE(1);
+      PIN_MUX_ALTERNATIVE(altMode);
 
     IOMUXC->SW_PAD_CTL_PAD[SW_PAD_CTL_PAD_by_index[pad]] =
       IOMUXC_SW_PAD_CTL_PAD_PKE(1) | /* Pull/Keep Enable */
@@ -329,7 +340,7 @@ void _pal_lld_setpadmode(ioportid_t port,
 
   case PAL_MODE_INPUT_PULLDOWN:
     IOMUXC->SW_MUX_CTL_PAD[SW_MUX_CTL_PAD_by_index[pad]] =
-      PIN_MUX_ALTERNATIVE(1);
+      PIN_MUX_ALTERNATIVE(altMode);
 
     IOMUXC->SW_PAD_CTL_PAD[SW_PAD_CTL_PAD_by_index[pad]] =
       IOMUXC_SW_PAD_CTL_PAD_PKE(1) | /* Pull/Keep Enable */
@@ -340,7 +351,7 @@ void _pal_lld_setpadmode(ioportid_t port,
   case PAL_MODE_UNCONNECTED:
   case PAL_MODE_INPUT_ANALOG:
     IOMUXC->SW_MUX_CTL_PAD[SW_MUX_CTL_PAD_by_index[pad]] =
-      PIN_MUX_ALTERNATIVE(1);
+      PIN_MUX_ALTERNATIVE(altMode);
     break;
 
   case PAL_MODE_ALTERNATIVE_1:
@@ -378,6 +389,13 @@ void _pal_lld_setpadmode(ioportid_t port,
       PIN_MUX_ALTERNATIVE(7);
     break;
   }
+
+    // GPIO direction register (GDIR)
+  if (mode == PAL_MODE_OUTPUT_PUSHPULL)
+    port->GDIR |= ((uint32_t) 1 << bit_by_index[pad]);
+  else
+    port->GDIR &= ~((uint32_t) 1 << bit_by_index[pad]);
+
 }
 
 /*===========================================================================*/
@@ -440,9 +458,11 @@ void _pal_lld_setgroupmode(ioportid_t port,
 
   (void)mask;
 
+#if 0
   for (i = 0; i < PADS_PER_PORT; i++) {
     pal_lld_setpadmode(port, i, mode);
   }
+#endif
 }
 
 #endif /* HAL_USE_PAL */
