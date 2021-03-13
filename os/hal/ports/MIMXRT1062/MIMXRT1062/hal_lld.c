@@ -851,8 +851,25 @@ void ResetHandler(void) {
 
 #define NVIC_SET_PRIORITY(irqnum, priority)  (*((volatile uint8_t *)0xE000E400 + (irqnum)) = (uint8_t)(priority))
 #if 1
+	// we have 16 banks of memory, and 512 KB of FlexRAM, divided into 512 KB / 16 = 32 KB
+	// 0xAAAAAAAB
+	// = 10101010101010101010101010101011
+	// where 11b is ITCM
+	// and 10b is DTCM
+	// GPR17 = FLEXRAM_BANK_CFG
 	IOMUXC_GPR->GPR17 = (uint32_t)&_flexram_bank_config;
+
+	// TODO: when is CM7_INIT_VTOR used? it says VTOR out of reset, but… is
+	// that only relevant for the next reset?
+
+	// GPR16 contains CM7_INIT_VTOR (0x00200) | FLEXRAM_BANK_CFG(1) | INIT_DTCM_EN(1) | INIT_ITCM_EN(1)
 	IOMUXC_GPR->GPR16 = 0x00200007;
+
+	// GPR14
+	// ( 11111111111111111111111111111111b)
+	// = xxxxxxxx101010100000000000000000b
+	//           ^^^^ = CM7_CFGDTCMSZ(512K)
+	//               ^^^^ = CM7_CFGITCMSZ(512K)
 	IOMUXC_GPR->GPR14 = 0x00AA0000;
 	__asm__ volatile("mov sp, %0" : : "r" ((uint32_t)&_estack) : );
 #endif
