@@ -23,7 +23,6 @@
  */
 
 #include "hal.h"
-#include "osal.h"
 
 #if (OSAL_ST_MODE != OSAL_ST_MODE_NONE) || defined(__DOXYGEN__)
 
@@ -59,6 +58,7 @@
  * @isr
  */
 OSAL_IRQ_HANDLER(SysTick_Handler) {
+
   OSAL_IRQ_PROLOGUE();
 
   osalSysLockFromISR();
@@ -83,9 +83,6 @@ OSAL_IRQ_HANDLER(SysTick_Handler) {
 // the ARM clock to run at different speeds.
 #define SYSTICK_EXT_FREQ 100000
 
-#define NVIC_NUM_INTERRUPTS 160
-extern void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
-
 /**
  * @brief   Low level ST driver initialization.
  *
@@ -94,20 +91,14 @@ extern void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
 void st_lld_init(void) {
 #if OSAL_ST_MODE == OSAL_ST_MODE_PERIODIC
   printf_debug("st_lld_init, enabling systick\n");
-
-  _VectorsRam[15] = SysTick_Handler;
-
   /* Periodic systick mode, the Cortex-Mx internal systick timer is used
      in this mode.*/
   SysTick->LOAD = (SYSTICK_EXT_FREQ / OSAL_ST_FREQUENCY) - 1;
-  SysTick->VAL = 0; // 0x9000
+  SysTick->VAL = 0;
   SysTick->CTRL = SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk;
 
   /* IRQ enabled.*/
-  //nvicSetSystemHandlerPriority(HANDLER_SYSTICK, KINETIS_ST_IRQ_PRIORITY);
-
-#else
-  #error wrong
+  nvicSetSystemHandlerPriority(HANDLER_SYSTICK, KINETIS_ST_IRQ_PRIORITY);
 #endif /* OSAL_ST_MODE == OSAL_ST_MODE_PERIODIC */
 }
 
