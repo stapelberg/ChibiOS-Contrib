@@ -358,8 +358,8 @@ void configure_cache(void)
 	// _ebss == ADDR(.bss) + SIZEOF(.bss)
 	
 // TODO: update &_ebss with the correct symbol in ChibiOS
-	MPU->RBAR = ((uint32_t)&_ebss) | REGION(i++); // trap stack overflow
-	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_32B;
+//	MPU->RBAR = ((uint32_t)&_ebss) | REGION(i++); // trap stack overflow
+//	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_32B;
 
 	MPU->RBAR = 0x20200000 | REGION(i++); // RAM (AXI bus)
 	MPU->RASR = MEM_CACHE_WBWA | READWRITE | NOEXEC | SIZE_1M;
@@ -559,8 +559,8 @@ void reset_PFD(void) {
 #define NVIC_NUM_INTERRUPTS 160
 extern uint32_t _vectors[NVIC_NUM_INTERRUPTS];
 
-__attribute__ ((used, aligned(1024)))
-void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
+/* __attribute__ ((used, aligned(1024))) */
+/* void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void); */
 
 // Stack frame
 //  xPSR
@@ -742,6 +742,53 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
   }
 }
 
+extern uint32_t __main_stack_end__;
+extern uint32_t __process_stack_end__;
+
+// flexram initialization must happen before crt0 initializes stack pointers
+void __flexram_init(void) {
+	/* See also https://www.nxp.com/docs/en/application-note/AN12077.pdf */
+
+  // TODO: AN12077 says that OCRAM cannot be 0, but that’s what the teensy does?!
+  
+	// we have 16 banks of memory, and 512 KB of FlexRAM, divided into 512 KB / 16 = 32 KB
+	// 0xAAAAAAAB
+	// = 10101010101010101010101010101011
+	// where 11b is ITCM
+	// and 10b is DTCM
+	// GPR17 = FLEXRAM_BANK_CFG
+	//IOMUXC_GPR->GPR17 = 0xAAAAAAAB; // TODO: (uint32_t)&_flexram_bank_config;
+	IOMUXC_GPR->GPR17 = 0xAAAAAAAA; // TODO: (uint32_t)&_flexram_bank_config;
+
+	// TODO: when is CM7_INIT_VTOR used? it says VTOR out of reset, but… is
+	// that only relevant for the next reset?
+
+	// GPR16 contains CM7_INIT_VTOR (0x00200) | FLEXRAM_BANK_CFG(1) | INIT_DTCM_EN(1) | INIT_ITCM_EN(1)
+	IOMUXC_GPR->GPR16 =
+	  0x00200000 |
+	  IOMUXC_GPR_GPR16_FLEXRAM_BANK_CFG_SEL(1) |
+	  IOMUXC_GPR_GPR16_INIT_DTCM_EN(1) |
+	  IOMUXC_GPR_GPR16_INIT_ITCM_EN(0);
+	  // 0x00200007;
+
+	// GPR14
+	// ( 11111111111111111111111111111111b)
+	// = xxxxxxxx101010100000000000000000b
+	//           ^^^^ = CM7_CFGDTCMSZ(512K)
+	//               ^^^^ = CM7_CFGITCMSZ(512K)
+	IOMUXC_GPR->GPR14 =
+	  IOMUXC_GPR_GPR14_CM7_CFGDTCMSZ(10 /* 512 KB */) |
+	  IOMUXC_GPR_GPR14_CM7_CFGITCMSZ(0 /* No ITCM */);
+	//	  0x00AA0000;
+
+	// ChibiOS sets up stack pointers in crt0.
+	//__asm__ volatile("mov sp, %0" : : "r" ((uint32_t)&_estack) : );
+
+	// Set up separate MSP/PSP for ChibiOS
+	// https://interrupt.memfault.com/blog/cortex-m-rtos-context-switching
+	/* asm volatile("msr msp, %0" : : "r" ((uint32_t)&__main_stack_end__) : ); */
+	/* asm volatile("msr psp, %0" : : "r" ((uint32_t)&__process_stack_end__) : ); */
+}
 
 /**
  * @brief   MIMXRT1062 clock initialization.
@@ -756,17 +803,16 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
 void MIMXRT1062_clock_init(void) {
   //unsigned int i;
 
-  // defined(MIMXRT1062)
-#if defined(__IMXRT1062__)
-  #error flexram
-	/* TODO: see https://www.nxp.com/docs/en/application-note/AN12077.pdf */
-	IOMUXC_GPR_GPR17 = (uint32_t)&_flexram_bank_config;
-	IOMUXC_GPR_GPR16 = 0x00200007;	// 0b001000000000000000000111
-	IOMUXC_GPR_GPR14 = 0x00AA0000;  // 0b101010100000000000000000
-	// IOMUXC_GPR_GPR14_CM7_MX6RT_CFGDTCMSZ(10 /* 512 KB */) |
-	// IOMUXC_GPR_GPR14_CM7_MX6RT_CFGITCMSZ(10 /* 512 KB */)
-	__asm__ volatile("mov sp, %0" : : "r" ((uint32_t)&_estack) : );
+#if 0
+	for (int c = 0; c < 1; c++) {
+	  GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
+	  delay(600000000); // 1s
+	  GPIO7->DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
+	  delay(600000000); // 1s
+	}
 #endif
+  
+  
 	PMU->MISC0_SET = 1<<3; //Use bandgap-based bias currents for best performance (Page 1175)
 
 	// pin 13 - if startup crashes, use this to turn on the LED early for troubleshooting
@@ -775,14 +821,17 @@ void MIMXRT1062_clock_init(void) {
 	IOMUXC_GPR->GPR27 = 0xFFFFFFFF;
 	GPIO7->GDIR |= (1<<3);
 	GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
+}
 
-	// In ChibiOS, memory set up happens after the clock initialization:
-	// https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L256
+// In ChibiOS, memory set up happens after the clock initialization:
+// https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L256
 
-	// In ChibiOS, the FPU is enabled conditionally at
-	// https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L209
+// In ChibiOS, the FPU is enabled conditionally at
+// https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L209
 
-#define NVIC_SET_PRIORITY(irqnum, priority)  (*((volatile uint8_t *)0xE000E400 + (irqnum)) = (uint8_t)(priority))
+void MIMXRT1062_late_init(void) {
+
+  #define NVIC_SET_PRIORITY(irqnum, priority)  (*((volatile uint8_t *)0xE000E400 + (irqnum)) = (uint8_t)(priority))
 
 	// teensy4/startup.c copies the vector table into RAM here.
 	// We don’t need that, as we don’t modify the vector table at runtime.
@@ -843,7 +892,9 @@ void MIMXRT1062_clock_init(void) {
 	  delay(600000000); // 1s
 	}
 #endif	
+
 }
+
 
 extern void Reset_Handler(void);
 extern unsigned long _flashimagelen;

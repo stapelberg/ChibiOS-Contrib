@@ -314,6 +314,8 @@ extern "C" {
 #endif
   void hal_lld_init(void);
   void MIMXRT1062_clock_init(void);
+  void MIMXRT1062_late_init(void);
+  void __flexram_init(void);
 #ifdef __cplusplus
 }
 #endif

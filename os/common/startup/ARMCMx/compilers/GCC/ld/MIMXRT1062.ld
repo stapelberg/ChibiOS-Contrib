@@ -39,15 +39,28 @@ MEMORY
   flash2   : org = 0x00000000, len = 0
   flash3   : org = 0x00000000, len = 0
 
+  /* NOTE: ram0, ram1 and ram2 can be configured to use various
+     percentages of the available 512K of flexram.
+
+     The teensy linker script defines each with a 512k size.
+
+     That is not safe to do with ChibiOS, where the full size
+     of an individual entry (e.g. 512K for ram1) will be used
+     in full, e.g. for the heap. */
+
   /* Possible optimization: place code marked as FASTRUN in ram0 */
   /* ram0: ITCM, can be TCM or general purpose
      IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
      0000_0000 Size: 512KB ITCM  */
-  ram0     : org = 0x00000000, len = 128k
+  ram0     : org = 0x00000000, len = 512k
+
+  /* Our startup code configures all of the flexram as DTCM. */
   /* ram1: DTCM, general purpose only
      IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
      2000_0000 Size: 512KB DTCM  */
-  ram1     : org = 0x20000000, len = 128k
+  ram1     : org = 0x20000000, len = 512k
+
+  /* Our startup code does not configure any ram2. */
   /* ram2: OCRAM (On-Chip RAM), for new/malloc() and DMAMEM variables
      IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
      2020_0000 Size: 512KB OCRAM2  */
@@ -127,7 +140,7 @@ REGION_ALIAS("BSS_RAM", ram1);
 
 /* RAM region to be used for the default heap.*/
 /* _heap_start in imxrt1062.ld */
-REGION_ALIAS("HEAP_RAM", ram2);
+REGION_ALIAS("HEAP_RAM", ram1);
 
 /* Generic rules inclusion.*/
 INCLUDE rules.ld

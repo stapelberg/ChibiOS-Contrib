@@ -505,12 +505,6 @@ void usb_lld_init(void) {
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
-#define NVIC_NUM_INTERRUPTS 160 //CORTEX_NUM_VECTORS
-extern void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
-static inline void attachInterruptVector(int irq, void (*function)(void)) __attribute__((always_inline, unused));
-static inline void attachInterruptVector(int irq, void (*function)(void)) { _VectorsRam[irq + 16] = function; asm volatile("": : :"memory"); }
-
-
 /**
  * @brief   Configures and activates the USB peripheral.
  *
@@ -612,17 +606,7 @@ void usb_lld_start(USBDriver *usbp) {
     USB_USBINTR_SLE(1) /* Sleep Interrupt Enable */ |
     USB_USBINTR_SRE(1) /* Start Of Frame */;
 
-  attachInterruptVector(USB_OTG1_IRQn, &Vector204);
-  #define NVIC_ISER0              (*(volatile uint32_t *)0xE000E100)
-#define NVIC_ISER1              (*(volatile uint32_t *)0xE000E104)
-#define NVIC_ISER2              (*(volatile uint32_t *)0xE000E108)
-#define NVIC_ISER3              (*(volatile uint32_t *)0xE000E10C)
-#define NVIC_ISER4              (*(volatile uint32_t *)0xE000E110)
-
-#define NVIC_ENABLE_IRQ(n)      (*(&NVIC_ISER0 + ((n) >> 5)) = (1 << ((n) & 31)))
-
-  NVIC_ENABLE_IRQ(USB_OTG1_IRQn);
-  //nvicEnableVector(USB_OTG1_IRQn, MIMXRT1062_USB_USB1_IRQ_PRIORITY);
+  nvicEnableVector(USB_OTG1_IRQn, MIMXRT1062_USB_USB1_IRQ_PRIORITY);
 
   // Set Run/Stop bit to Run Mode:
   USB1->USBCMD = USB_USBCMD_RS(1 /* 0b1 = run */);
