@@ -853,6 +853,14 @@ void MIMXRT1062_late_init(void) {
 	// UARTs run from 24 MHz clock (works if PLL3 off or bypassed)
 	CCM->CSCDR1 = (CCM->CSCDR1 & ~CCM_CSCDR1_UART_CLK_PODF(0x3F)) | CCM_CSCDR1_UART_CLK_SEL_MASK;
 
+#if 1 // GPIO does not work without this:
+	// Use fast GPIO6, GPIO7, GPIO8, GPIO9
+	IOMUXC_GPR->GPR26 = 0xFFFFFFFF;
+	IOMUXC_GPR->GPR27 = 0xFFFFFFFF;
+	IOMUXC_GPR->GPR28 = 0xFFFFFFFF;
+	IOMUXC_GPR->GPR29 = 0xFFFFFFFF;
+#endif
+	
 	printf_debug_init();
 	printf_debug("\n***********IMXRT Chibi Startup**********\n");
 	printf_debug("test %d %d %d\n", 1, -1234567, 3);
