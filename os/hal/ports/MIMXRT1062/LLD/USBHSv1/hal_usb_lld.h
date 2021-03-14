@@ -208,7 +208,7 @@ struct endpoint_struct {
  */
 typedef struct {
   // Must come first so that we can align the USBInEndpointState:
-  transfer_t transfer;
+  transfer_t transfer __attribute__((aligned(32)));
   
   /**
    * @brief   Requested transmit transfer size.
@@ -236,7 +236,7 @@ typedef struct {
  */
 typedef struct {
   // Must come first so that we can align the USBOutEndpointState:
-  transfer_t transfer;
+  transfer_t transfer __attribute__((aligned(32)));
   
   /**
    * @brief   Requested receive transfer size.
