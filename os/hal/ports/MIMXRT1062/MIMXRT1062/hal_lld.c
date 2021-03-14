@@ -381,14 +381,16 @@ void configure_cache(void)
 	MPU->CTRL = SCB_MPU_CTRL_ENABLE;
 #endif
 
-	// cache enable, ARM DDI0403E, pg 628
-	asm("dsb");
-	asm("isb");
-	SCB->ICIALLU = 0;
+	// ChibiOS initializes the cache in __cpu_init
+	
+	/* // cache enable, ARM DDI0403E, pg 628 */
+	/* asm("dsb"); */
+	/* asm("isb"); */
+	/* SCB->ICIALLU = 0; */
 
-	asm("dsb");
-	asm("isb");
-	SCB->CCR |= (SCB_CCR_IC_Msk | SCB_CCR_DC_Msk);
+	/* asm("dsb"); */
+	/* asm("isb"); */
+	/* SCB->CCR |= (SCB_CCR_IC_Msk | SCB_CCR_DC_Msk); */
 }
 
 uint32_t set_arm_clock(uint32_t frequency)
