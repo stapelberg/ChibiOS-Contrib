@@ -924,8 +924,20 @@ const uint32_t vector_table[2] = {
 /* See section 2.5.2 in https://www.nxp.com/docs/en/application-note/AN12107.pdf */
 __attribute__ ((section(".bootdata"), used))
 const uint32_t BootData[3] = {
-	0x60000000,                // absolute address of the bootable image
-	(uint32_t)&_flashimagelen,
+  // destination address is equal to the external flash address, so the i.MX
+  // BootROM will skip any remaining memory copies and start up the application
+  // binary directly in the flash address space.
+  // See section 3.2.2 in https://www.nxp.com/docs/en/nxp/application-notes/AN12238.pdf
+  	0x60000000,                // absolute address of the bootable image
+	// The following size normally determines how many bytes are copied from
+	// flash to RAM, but because the destination address is equal to the
+	// flash address, no copying is taking place.
+	//
+	// So, logically, we would set this field to 0, but 32 is the minimum
+	// size that works in practice. My guess is that 32 is the size of the
+	// IVT, and perhaps the BootROM code needs the IVT to be present and
+	// accounted for.
+	32,
 	0,                         // plugin flag, 0 = normal boot image
 };
 
