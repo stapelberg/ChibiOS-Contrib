@@ -355,9 +355,8 @@ void configure_cache(void)
 	MPU->RBAR = 0x20000000 | REGION(i++); // DTCM
 	MPU->RASR = MEM_NOCACHE | READWRITE | NOEXEC | SIZE_512K;
 
-	// _ebss == ADDR(.bss) + SIZEOF(.bss)
-	
-// TODO: update &_ebss with the correct symbol in ChibiOS
+	// teensy4/startup.c sets up a region on the stack to detect stack overflow.
+	// ChibiOS, at the time of writing, does not.
 //	MPU->RBAR = ((uint32_t)&_ebss) | REGION(i++); // trap stack overflow
 //	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_32B;
 
