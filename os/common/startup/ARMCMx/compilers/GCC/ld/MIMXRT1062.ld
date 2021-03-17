@@ -39,6 +39,11 @@ MEMORY
   flash2   : org = 0x00000000, len = 0
   flash3   : org = 0x00000000, len = 0
 
+  /* ram0: OCRAM (On-Chip RAM)
+     IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
+     2020_0000 Size: 512KB OCRAM2  */
+  ram0     : org = 0x20200000, len = 512k
+
   /* NOTE: ram0, ram1 and ram2 can be configured to use various
      percentages of the available 512K of flexram.
 
@@ -52,19 +57,16 @@ MEMORY
   /* ram0: ITCM, can be TCM or general purpose
      IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
      0000_0000 Size: 512KB ITCM  */
-  ram0     : org = 0x00000000, len = 512k
+  ram1     : org = 0x00000000, len = 0 /* 512k */
 
   /* Our startup code configures all of the flexram as DTCM. */
   /* ram1: DTCM, general purpose only
      IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
      2000_0000 Size: 512KB DTCM  */
-  ram1     : org = 0x20000000, len = 512k
+  ram2     : org = 0x00000000 /* 0x20000000 */, len = 0 /* 480k */
+  /* TODO: dynamically configure out of max = ram1     : org = 0x20000000, len = 512k */
 
-  /* Our startup code does not configure any ram2. */
-  /* ram2: OCRAM (On-Chip RAM), for new/malloc() and DMAMEM variables
-     IMXRT1060RM: Page 36 Table 3-1 System memory map (CM7)
-     2020_0000 Size: 512KB OCRAM2  */
-  ram2     : org = 0x20200000, len = 512k
+  /* 0x20280000 (OCRAM - FlexRAM) is unused */
 
   ram3     : org = 0x00000000, len = 0
   ram4     : org = 0x00000000, len = 0
@@ -123,24 +125,24 @@ REGION_ALIAS("RAM_INIT_FLASH_LMA", flash0);
 
 /* RAM region to be used for Main stack. This stack accommodates the processing
    of all exceptions and interrupts.*/
-REGION_ALIAS("MAIN_STACK_RAM", ram1);
+REGION_ALIAS("MAIN_STACK_RAM", ram0);
 
 /* RAM region to be used for the process stack. This is the stack used by
    the main() function.*/
-REGION_ALIAS("PROCESS_STACK_RAM", ram1);
+REGION_ALIAS("PROCESS_STACK_RAM", ram0);
 
 /* RAM region to be used for data segment.*/
 /* .data in teensy-arduino-core/imxrt1062.ld */
-REGION_ALIAS("DATA_RAM", ram1);
+REGION_ALIAS("DATA_RAM", ram0);
 REGION_ALIAS("DATA_RAM_LMA", flash0);
 
 /* RAM region to be used for BSS segment.*/
 /* .bss in imxrt1062.ld */
-REGION_ALIAS("BSS_RAM", ram1);
+REGION_ALIAS("BSS_RAM", ram0);
 
 /* RAM region to be used for the default heap.*/
 /* _heap_start in imxrt1062.ld */
-REGION_ALIAS("HEAP_RAM", ram1);
+REGION_ALIAS("HEAP_RAM", ram0);
 
 /* Generic rules inclusion.*/
 INCLUDE rules.ld
