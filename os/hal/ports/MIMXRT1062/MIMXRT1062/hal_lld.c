@@ -869,15 +869,10 @@ __attribute__((naked, target("thumb"), aligned(2)))
 void trampoline_reset_handler(void) {
   __disable_irq();
 
-  // Remaining mystery: the teensy4 Arduino core startup code does not disable
-  // i/d cache, but the circuitpython startup code does.
-  //
-  // https://github.com/PaulStoffregen/cores/blob/a2368ad57e9470608a234d942c55a2278c6cd72b/teensy4/startup.c#L53
-  // https://github.com/adafruit/circuitpython/blob/e084a92671b01220c795d114bee9d5058dbfa680/ports/mimxrt10xx/supervisor/port.c#L116
-  SCB_DisableICache();
-  SCB_DisableDCache();
-  // If the above isn’t present, the following seems to work, too:
-  //*((uint32_t*)0x20200044) = 0x23;
+  // Switch to final VTOR as quickly as possible to have fault handlers set up
+  // (e.g. HardFault) for easier debugging. When encountering a fault without a
+  // usable VTOR table, the MCU will raise another fault and end up in lockup.
+  SCB->VTOR = (uint32_t)&_vectors;
   
   IOMUXC_GPR->GPR17 = 0xaaaaaaaa;
   __DSB();
@@ -900,10 +895,6 @@ void trampoline_reset_handler(void) {
 
   __DSB();
   __ISB();
-
-  // This looks duplicative with crt0_v7m.S at first glance, but without
-  // this line, the MCU will not boot up:
-  __set_MSP((uint32_t)&__main_stack_end__);
 
   Reset_Handler();
 }
@@ -970,7 +961,7 @@ uint32_t FlexSPI_NOR_Config[128] = {
 	0x42464346,		// Tag				0x00
 	0x56010000,		// Version
 	0,			// reserved
-	0x00020101,		// columnAdressWidth,dataSetupTime,dataHoldTime,readSampleClkSrc
+	0x00030301,		// columnAdressWidth,dataSetupTime,dataHoldTime,readSampleClkSrc
 
 	0x00000000,		// waitTimeCfgCommands,-,deviceModeCfgEnable
 	0,			// deviceModeSeq
@@ -988,7 +979,11 @@ uint32_t FlexSPI_NOR_Config[128] = {
 	0,
 
 	0x00000000,		// controllerMiscOption		0x40
-	0x00030401,		// lutCustomSeqEnable,serialClkFreq,sflashPadType,deviceType
+	// The Teensy 4 config used to run the FlexSPI Serial Clock at 60 MHz:
+	// https://github.com/PaulStoffregen/cores/commit/c346fc36ed97dcaed2fa1d70626fbd80cf35586d
+	// whereas NXP is running it with 100 MHz. With the old default of 60
+	// MHz, I occasionally get hard faults when reading data from flash.
+	0x00080401,		// lutCustomSeqEnable,serialClkFreq,sflashPadType,deviceType
 	0,			// reserved
 	0,			// reserved
 // TODO:
