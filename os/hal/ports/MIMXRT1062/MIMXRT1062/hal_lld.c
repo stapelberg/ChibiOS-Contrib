@@ -927,8 +927,9 @@ const uint32_t BootData[3] = {
 	// So, logically, we would set this field to 0, but 32 is the minimum
 	// size that works in practice. My guess is that 32 is the size of the
 	// IVT, and perhaps the BootROM code needs the IVT to be present and
-	// accounted for.
-	32,
+	// accounted for. The NXP examples just set this to the size of the
+	// flash, so we do the same:
+	1984*1024,
 	0,                         // plugin flag, 0 = normal boot image
 };
 
