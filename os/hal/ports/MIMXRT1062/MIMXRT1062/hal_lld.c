@@ -574,7 +574,7 @@ extern uint32_t _vectors[NVIC_NUM_INTERRUPTS];
 //  R0
 // Code from :: https://community.nxp.com/thread/389002
 __attribute__((naked))
-void unused_interrupt_vector(void)
+void _unhandled_exception(void)
 {
   __asm( ".syntax unified\n"
          "MOVS R0, #4 \n"
