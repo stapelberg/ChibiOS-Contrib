@@ -19,51 +19,130 @@
 #include "ch_test.h"
 #include "rt_test_root.h"
 #include "oslib_test_root.h"
+#include "chprintf.h"
+#include "shell.h"
+#include <string.h>
+
+#include "usbcfg.h"
 
 /*
  * LED blinker thread.
  */
 static THD_WORKING_AREA(waThread1, 64);
 static THD_FUNCTION(Thread1, arg) {
-
     (void)arg;
     chRegSetThreadName("LEDBlinker");
     while (true) {
         palTogglePad(TEENSY_PIN13_IOPORT, TEENSY_PIN13);
-        chThdSleepMilliseconds(500);
+        chThdSleepSeconds(1);
     }
 }
+
+extern void printf_debug(const char *format, ...);
+
+#define SHELL_WA_SIZE THD_WORKING_AREA_SIZE(2048)
+
+static const ShellCommand commands[] = {{NULL, NULL}};
+
+static const ShellConfig shell_cfg1 = {(BaseSequentialStream *)&SDU1, commands};
+
+#define SHELL_WA_SIZE   THD_WORKING_AREA_SIZE(2048)
+
+static const ShellCommand commands[] = {
+  {NULL, NULL}
+};
+
+static const ShellConfig shell_cfg1 = {
+  (BaseSequentialStream *)&SDU1,
+  commands
+};
+
+
 
 /*
  * Application entry point.
  */
 int main(void) {
+    /*
+     * System initializations.
+     * - HAL initialization, this also initializes the configured device drivers
+     *   and performs the board-specific initializations.
+     * - Kernel initialization, the main() function becomes a thread and the
+     *   RTOS is active.
+     */
+    halInit();
 
-  /*
-   * System initializations.
-   * - HAL initialization, this also initializes the configured device drivers
-   *   and performs the board-specific initializations.
-   * - Kernel initialization, the main() function becomes a thread and the
-   *   RTOS is active.
-   */
-  halInit();
-  chSysInit();
+    // This is still visible, but then the device seems to restart
+    printf_debug("halInit done\n");
 
-  /*
-   * Activates serial 1 (UART0) using the driver default configuration.
-   */
-  sdStart(&SD1, NULL);
+    chSysInit();
 
-  /*
-   * Creates the blinker thread.
-   */
-  chThdCreateStatic(waThread1, sizeof(waThread1), NORMALPRIO, Thread1, NULL);
+    // printf_debug("chSysInit done\n");
+    // printf_debug("IRQn = %d\n", MIMXRT1062_SERIAL3_IRQ_VECTOR);
 
-  test_execute((BaseSequentialStream *)&SD1, &rt_test_suite);
-  test_execute((BaseSequentialStream *)&SD1, &oslib_test_suite);
+#define MYSERIAL &SD4
+    //#define MYSERIAL &SD1
+
+    /*
+     * Activates serial 1 (UART0) using the driver default configuration.
+     */
+    sdStart(MYSERIAL, NULL);
+    sdWrite(MYSERIAL, (unsigned char *)"Hello world!\r\n", strlen("Hello world!\r\n"));
+
+    /*
+     * Creates the blinker thread.
+     */
+    chThdCreateStatic(waThread1, sizeof(waThread1), NORMALPRIO, Thread1, NULL);
+
+#define USE_SHELL 1
+#if USE_SHELL /* USB serial */
+    /*
+     * Initializes a serial-over-USB CDC driver.
+     */
+    sduObjectInit(&SDU1);
+    sduStart(&SDU1, &serusbcfg);
+
+    /*
+     * Activates the USB driver and then the USB bus pull-up on D+.
+     * Note, a delay is inserted in order to not have to disconnect the cable
+     * after a reset.
+     */
+    usbDisconnectBus(serusbcfg.usbp);
+    chThdSleepMilliseconds(1500);
+    usbStart(serusbcfg.usbp, &usbcfg);
+    usbConnectBus(serusbcfg.usbp);
+#else
+    // Better to disable to make serial debug available without interruption:
+
+    test_execute((BaseSequentialStream *)MYSERIAL, &rt_test_suite);
+    test_execute((BaseSequentialStream *)MYSERIAL, &oslib_test_suite);
+#endif
+
+    while (true) {
+#if USE_SHELL
+        if (SDU1.config->usbp->state == USB_ACTIVE) {
+            sdWrite(MYSERIAL, (unsigned char *)"starting shl\r\n", strlen("starting shl\r\n"));
+            thread_t *shelltp = chThdCreateFromHeap(NULL, SHELL_WA_SIZE, "shell", NORMALPRIO + 1, shellThread, (void *)&shell_cfg1);
+            chThdWait(shelltp); /* Waiting termination.             */
+        }
+#endif
+        chThdSleepSeconds(1);
+    }
+
+#if 0
   while (true) {
-      chThdSleepMilliseconds(1000);
+      	  GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
+      //palTogglePad(TEENSY_PIN13_IOPORT, TEENSY_PIN13);
+	  systime_t before = chVTGetSystemTimeX();
+	  delay(600000000); // 1s
+	  systime_t after = chVTGetSystemTimeX();
+	  //printf_debug("systicks = %d\n", after-before);
+	  chThdSleepSeconds(1);
+	  GPIO7->DR_CLEAR = (1<<3); // digitalWrite(13, LOW);      
+	  chThdSleepSeconds(1);
+	  //delay(600000000); // 1s
+      //chThdSleepMilliseconds(1000);
   }
-
-  return 0;
+#endif
+    return 0;
 }
