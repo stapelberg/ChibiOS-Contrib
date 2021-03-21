@@ -341,8 +341,8 @@ void configure_cache(void)
 	MPU->RBAR = 0x00000000 | REGION(i++); //https://developer.arm.com/docs/146793866/10/why-does-the-cortex-m7-initiate-axim-read-accesses-to-memory-addresses-that-do-not-fall-under-a-defined-mpu-region
 	MPU->RASR = SCB_MPU_RASR_TEX(0) | NOACCESS | NOEXEC | SIZE_4G;
 	
-	MPU->RBAR = 0x00000000 | REGION(i++); // ITCM
-	MPU->RASR = MEM_NOCACHE | READWRITE | SIZE_512K;
+	/* MPU->RBAR = 0x00000000 | REGION(i++); // ITCM */
+	/* MPU->RASR = MEM_NOCACHE | READWRITE | SIZE_512K; */
 
 	// TODO: trap regions should be created last, because the hardware gives
 	//  priority to the higher number ones.
@@ -746,51 +746,6 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
 extern uint32_t __main_stack_end__;
 extern uint32_t __process_stack_end__;
 
-// flexram initialization must happen before crt0 initializes stack pointers
-void __flexram_init(void) {
-	/* See also https://www.nxp.com/docs/en/application-note/AN12077.pdf */
-
-  // TODO: AN12077 says that OCRAM cannot be 0, but that’s what the teensy does?!
-  
-	// we have 16 banks of memory, and 512 KB of FlexRAM, divided into 512 KB / 16 = 32 KB
-	// 0xAAAAAAAB
-	// = 10101010101010101010101010101011
-	// where 11b is ITCM
-	// and 10b is DTCM
-	// GPR17 = FLEXRAM_BANK_CFG
-	//IOMUXC_GPR->GPR17 = 0xAAAAAAAB; // TODO: (uint32_t)&_flexram_bank_config;
-	IOMUXC_GPR->GPR17 = 0xAAAAAAAA; // TODO: (uint32_t)&_flexram_bank_config;
-
-	// TODO: when is CM7_INIT_VTOR used? it says VTOR out of reset, but… is
-	// that only relevant for the next reset?
-
-	// GPR16 contains CM7_INIT_VTOR (0x00200) | FLEXRAM_BANK_CFG(1) | INIT_DTCM_EN(1) | INIT_ITCM_EN(1)
-	IOMUXC_GPR->GPR16 =
-	  0x00200000 |
-	  IOMUXC_GPR_GPR16_FLEXRAM_BANK_CFG_SEL(1) |
-	  IOMUXC_GPR_GPR16_INIT_DTCM_EN(1) |
-	  IOMUXC_GPR_GPR16_INIT_ITCM_EN(0);
-	  // 0x00200007;
-
-	// GPR14
-	// ( 11111111111111111111111111111111b)
-	// = xxxxxxxx101010100000000000000000b
-	//           ^^^^ = CM7_CFGDTCMSZ(512K)
-	//               ^^^^ = CM7_CFGITCMSZ(512K)
-	IOMUXC_GPR->GPR14 =
-	  IOMUXC_GPR_GPR14_CM7_CFGDTCMSZ(10 /* 512 KB */) |
-	  IOMUXC_GPR_GPR14_CM7_CFGITCMSZ(0 /* No ITCM */);
-	//	  0x00AA0000;
-
-	// ChibiOS sets up stack pointers in crt0.
-	//__asm__ volatile("mov sp, %0" : : "r" ((uint32_t)&_estack) : );
-
-	// Set up separate MSP/PSP for ChibiOS
-	// https://interrupt.memfault.com/blog/cortex-m-rtos-context-switching
-	/* asm volatile("msr msp, %0" : : "r" ((uint32_t)&__main_stack_end__) : ); */
-	/* asm volatile("msr psp, %0" : : "r" ((uint32_t)&__process_stack_end__) : ); */
-}
-
 /**
  * @brief   MIMXRT1062 clock initialization.
  * @note    All the involved constants come from the file @p board.h.
@@ -831,17 +786,8 @@ void MIMXRT1062_clock_init(void) {
 // https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L209
 
 void MIMXRT1062_late_init(void) {
-
-  #define NVIC_SET_PRIORITY(irqnum, priority)  (*((volatile uint8_t *)0xE000E400 + (irqnum)) = (uint8_t)(priority))
-
 	// teensy4/startup.c copies the vector table into RAM here.
 	// We don’t need that, as we don’t modify the vector table at runtime.
-	
-	// TODO: set up interrupts, or add reference to where ChibiOS does it
-	//for (i=0; i < NVIC_NUM_INTERRUPTS + 16; i++) _VectorsRam[i] = &unused_interrupt_vector;
-	//for (i=0; i < NVIC_NUM_INTERRUPTS; i++) NVIC_SET_PRIORITY(i, 128);
-	//for (i=0; i < NVIC_NUM_INTERRUPTS; i++) nvicSetSystemHandlerPriority(i, 128);
-	//SCB->VTOR = (uint32_t)_VectorsRam;
 
 	reset_PFD();
 
@@ -873,8 +819,8 @@ void MIMXRT1062_late_init(void) {
 	
 	configure_cache();
 	
-	// TODO: should be done by ChibiOS-Contrib/os/hal/ports/MIMXRT1062/LLD/PITv1/hal_st_lld.c i guess?	
-	//configure_systick();
+	// SysTick timer is initialized in
+	// os/hal/ports/MIMXRT1062/LLD/PITv1/hal_st_lld.c
 
 #if 0
 	for (int c = 0; c < 1; c++) {
@@ -908,16 +854,71 @@ void MIMXRT1062_late_init(void) {
 extern void Reset_Handler(void);
 extern unsigned long _flashimagelen;
 
+// trampoline_reset_handler initializes FlexRAM, then jumps to the ChibiOS
+// Reset_Handler. This is required because the ChibiOS crt0 does not provide a
+// hook in a suitable place to integrate FlexRAM configuration.
+//
+// Note that when loading an image into the debugger, the ELF entry point
+// (specified by ENTRY(Reset_Handler) in rules_code.ld) is used directly, and
+// our trampoline_reset_handler that we configure in the Image Vector Table
+// (IVT) is not called. Instead, the debugger Connect Script
+// (e.g. rt1060_connect.scp) is responsible for setting up FlexRAM.  Instead of
+// modifying the Connect Script accordingly, it might be easier to change
+// ENTRY(Reset_Handler) to ENTRY(trampoline_reset_handler) for debugging.
+__attribute__((naked, target("thumb"), aligned(2)))
+void trampoline_reset_handler(void) {
+  __disable_irq();
+
+  // Remaining mystery: the teensy4 Arduino core startup code does not disable
+  // i/d cache, but the circuitpython startup code does.
+  //
+  // https://github.com/PaulStoffregen/cores/blob/a2368ad57e9470608a234d942c55a2278c6cd72b/teensy4/startup.c#L53
+  // https://github.com/adafruit/circuitpython/blob/e084a92671b01220c795d114bee9d5058dbfa680/ports/mimxrt10xx/supervisor/port.c#L116
+  SCB_DisableICache();
+  SCB_DisableDCache();
+  // If the above isn’t present, the following seems to work, too:
+  //*((uint32_t*)0x20200044) = 0x23;
+  
+  IOMUXC_GPR->GPR17 = 0xaaaaaaaa;
+  __DSB();
+  __ISB();
+  IOMUXC_GPR->GPR16 &= ~IOMUXC_GPR_GPR16_INIT_ITCM_EN_MASK;
+  IOMUXC_GPR->GPR16 |=
+    IOMUXC_GPR_GPR16_FLEXRAM_BANK_CFG_SEL(1) |
+    IOMUXC_GPR_GPR16_INIT_DTCM_EN(1) |
+    IOMUXC_GPR_GPR16_INIT_ITCM_EN(0);
+
+  __DSB();
+  __ISB();
+
+  uint32_t current_gpr14 = IOMUXC_GPR->GPR14;
+  current_gpr14 &= ~IOMUXC_GPR_GPR14_CM7_CFGDTCMSZ_MASK;
+  current_gpr14 |= IOMUXC_GPR_GPR14_CM7_CFGDTCMSZ(10);
+  current_gpr14 &= ~IOMUXC_GPR_GPR14_CM7_CFGITCMSZ_MASK;
+  current_gpr14 |= IOMUXC_GPR_GPR14_CM7_CFGITCMSZ(0);
+  IOMUXC_GPR->GPR14 = current_gpr14;
+
+  __DSB();
+  __ISB();
+
+  // This looks duplicative with crt0_v7m.S at first glance, but without
+  // this line, the MCU will not boot up:
+  __set_MSP((uint32_t)&__main_stack_end__);
+
+  Reset_Handler();
+}
+
 // IMXRT1060RM: 9.5.5 Exception handling
-// A minimal vector table with only the first 2 elements
+// A minimal vector table with only the first 2 elements, i.e. initial SP (stack
+// pointer) and PC (program count) values.
 __attribute__ ((section(".vectors"), used, aligned(1024)))
-const uint32_t vector_table[2] = {
-  // initial SP (stack pointer) value when booting:
-#if 1 // defined(__IMXRT1062__)
-	0x20010000, // 64K DTCM for boot, ResetHandler configures stack after ITCM/DTCM setup
-#endif
-	// initial PC (program count) value when booting:
-	(uint32_t)&Reset_Handler
+const uint32_t vector_table[] = {
+  // Initial SP (stack pointer) value when booting.
+  // Will be updated to point to DTCM FlexRAM by ChibiOS crt0_v7m.S.
+  0x20201000, // OCRAM, always available regardless of FlexRAM setting.
+
+  // Initial PC (program count) value when booting.
+  (uint32_t)&trampoline_reset_handler, // jumps to Reset_Handler
 };
 
 /* See section 2.5.2 in https://www.nxp.com/docs/en/application-note/AN12107.pdf */
@@ -947,7 +948,15 @@ const uint32_t ImageVectorTable[8] = {
 	0x402000D1,		// header
 	(uint32_t)vector_table, // docs are wrong, needs to be vec table, not start addr
 	0,			// reserved
-	0,			// DCD (Device Configuration Data), e.g. for SDRAM during boot
+
+	// DCD (Device Configuration Data), e.g. for SDRAM during boot.  Note
+	// that the BootROM of the i.MX RT 1060 does not actually support DCD,
+	// so this field must always be set to 0:
+	//
+	// IMXRT1060RM: NOTE: The DCD is not supported in the BootROM, in this
+	// device. It must be set to 0x00.
+	0,
+	
 	(uint32_t)BootData,	// abs address of boot data
 	(uint32_t)ImageVectorTable, // self
 	0,			// command sequence file
