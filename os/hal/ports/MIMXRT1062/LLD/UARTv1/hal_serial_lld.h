@@ -44,7 +44,7 @@
  * @details If set to @p TRUE the support for SD1 is included.
  */
 #if !defined(MIMXRT1062_SERIAL_USE_UART0) || defined(__DOXYGEN__)
-#define MIMXRT1062_SERIAL_USE_UART0             FALSE
+#define MIMXRT1062_SERIAL_USE_UART0             TRUE
 #endif
 /**
  * @brief   SD2 driver enable switch.
@@ -58,7 +58,7 @@
  * @details If set to @p TRUE the support for SD3 is included.
  */
 #if !defined(MIMXRT1062_SERIAL_USE_UART2) || defined(__DOXYGEN__)
-#define MIMXRT1062_SERIAL_USE_UART2             FALSE
+#define MIMXRT1062_SERIAL_USE_UART2             TRUE
 #endif
 /**
  * @brief   SD4 driver enable switch.
@@ -200,21 +200,6 @@ typedef struct {
  */
 
 typedef struct {
-#if 0
-  volatile uint8_t*  bdh_p;
-  volatile uint8_t*  bdl_p;
-  volatile uint8_t*  c1_p;
-  volatile uint8_t*  c2_p;
-  volatile uint8_t*  c3_p;
-  volatile uint8_t*  c4_p;
-  volatile uint8_t*  s1_p;
-  volatile uint8_t*  s2_p;
-  volatile uint8_t*  d_p;
-  UART_Type *uart_p;
-#endif
-#if MIMXRT1062_SERIAL_USE_UART0 && MIMXRT1062_SERIAL0_IS_UARTLP
-  UARTLP_Type *uartlp_p;
-#endif /* MIMXRT1062_SERIAL_USE_UART0 && MIMXRT1062_SERIAL0_IS_UARTLP */
   LPUART_Type *lpuart_p;
 } UART_w_TypeDef;
 
