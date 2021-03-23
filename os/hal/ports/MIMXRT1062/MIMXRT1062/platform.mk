@@ -1,5 +1,6 @@
 PLATFORMSRC_CONTRIB := ${CHIBIOS}/os/hal/ports/common/ARMCMx/nvic.c \
                        ${CHIBIOS_CONTRIB}/os/hal/ports/MIMXRT1062/MIMXRT1062/hal_lld.c \
+                       ${CHIBIOS_CONTRIB}/os/hal/ports/MIMXRT1062/MIMXRT1062/clock_config.c \
                        ${CHIBIOS_CONTRIB}/os/hal/ports/MIMXRT1062/LLD/PITv1/hal_st_lld.c
                        
 PLATFORMINC_CONTRIB := ${CHIBIOS}/os/hal/ports/common/ARMCMx \

@@ -52,6 +52,8 @@
 
 #include "hal.h"
 
+#include "clock_config.h"
+
 /*===========================================================================*/
 /* Driver local definitions.                                                 */
 /*===========================================================================*/
@@ -222,49 +224,6 @@ void printf_debug_init(void)
 
 #endif /* PRINT_DEBUG_STUFF */
 
-void usb_pll_start(void) {
-	while (1) {
-		uint32_t n = CCM_ANALOG->PLL_USB1; // pg 759
-		printf_debug("CCM_ANALOG_PLL_USB1=%08lX\n", n);
-		if (n & CCM_ANALOG_PLL_USB1_DIV_SELECT(1)) {
-			printf_debug("  ERROR, 528 MHz mode!\n"); // never supposed to use this mode!
-			CCM_ANALOG->PLL_USB1_CLR = 0xC000;			// bypass 24 MHz
-			CCM_ANALOG->PLL_USB1_SET = CCM_ANALOG_PLL_USB1_BYPASS(1);	// bypass
-			CCM_ANALOG->PLL_USB1_CLR = CCM_ANALOG_PLL_USB1_POWER(1) |	// power down
-			  CCM_ANALOG_PLL_USB1_DIV_SELECT(1) |		// use 480 MHz
-			  CCM_ANALOG_PLL_USB1_ENABLE(1) |			// disable
-			  CCM_ANALOG_PLL_USB1_EN_USB_CLKS(1);		// disable usb
-			continue;
-		}
-		if (!(n & CCM_ANALOG_PLL_USB1_ENABLE(1))) {
-			printf_debug("  enable PLL\n");
-			// TODO: should this be done so early, or later??
-			CCM_ANALOG->PLL_USB1_SET = CCM_ANALOG_PLL_USB1_ENABLE(1);
-			continue;
-		}
-		if (!(n & CCM_ANALOG_PLL_USB1_POWER(1))) {
-			printf_debug("  power up PLL\n");
-			CCM_ANALOG->PLL_USB1_SET = CCM_ANALOG_PLL_USB1_POWER(1);
-			continue;
-		}
-		if (!(n & CCM_ANALOG_PLL_USB1_LOCK(1))) {
-			printf_debug("  wait for lock\n");
-			continue;
-		}
-		if (n & CCM_ANALOG_PLL_USB1_BYPASS(1)) {
-			printf_debug("  turn off bypass\n");
-			CCM_ANALOG->PLL_USB1_CLR = CCM_ANALOG_PLL_USB1_BYPASS(1);
-			continue;
-		}
-		if (!(n & CCM_ANALOG_PLL_USB1_EN_USB_CLKS(1))) {
-			printf_debug("  enable USB clocks\n");
-			CCM_ANALOG->PLL_USB1_SET = CCM_ANALOG_PLL_USB1_EN_USB_CLKS(1);
-			continue;
-		}
-		return; // everything is as it should be  :-)
-	}
-}
-
 // TODO: port this to CMSIS style headers
 #define SCB_MPU_TYPE            (*(volatile uint32_t *)0xE000ED90) // 
 #define SCB_MPU_CTRL            (*(volatile uint32_t *)0xE000ED94) // 
@@ -384,180 +343,6 @@ void configure_cache(void)
 #endif
 
 	// ChibiOS initializes the cache in __cpu_init
-	
-	/* // cache enable, ARM DDI0403E, pg 628 */
-	/* asm("dsb"); */
-	/* asm("isb"); */
-	/* SCB->ICIALLU = 0; */
-
-	/* asm("dsb"); */
-	/* asm("isb"); */
-	/* SCB->CCR |= (SCB_CCR_IC_Msk | SCB_CCR_DC_Msk); */
-}
-
-uint32_t set_arm_clock(uint32_t frequency)
-{
-	uint32_t cbcdr = CCM->CBCDR; // pg 1021
-	uint32_t cbcmr = CCM->CBCMR; // pg 1023
-	uint32_t dcdc = DCDC->REG3;
-
-	// compute required voltage
-	uint32_t voltage = 1150; // default = 1.15V
-	if (frequency > 528000000) {
-		voltage = 1250; // 1.25V
-#if defined(OVERCLOCK_STEPSIZE) && defined(OVERCLOCK_MAX_VOLT)
-		if (frequency > 600000000) {
-			voltage += ((frequency - 600000000) / OVERCLOCK_STEPSIZE) * 25;
-			if (voltage > OVERCLOCK_MAX_VOLT) voltage = OVERCLOCK_MAX_VOLT;
-		}
-#endif
-	} else if (frequency <= 24000000) {
-		voltage = 950; // 0.95
-	}
-
-	// if voltage needs to increase, do it before switch clock speed
-	CCM->CCGR6 |= CCM_CCGR6_CG3(1);
-	if ((dcdc & DCDC_REG3_TRG_MASK) < DCDC_REG3_TRG((voltage - 800) / 25)) {
-		printf_debug("Increasing voltage to %u mV\n", voltage);
-		dcdc &= ~DCDC_REG3_TRG_MASK;
-		dcdc |= DCDC_REG3_TRG((voltage - 800) / 25);
-		DCDC->REG3 = dcdc;
-		while (!(DCDC->REG0 & DCDC_REG0_STS_DC_OK(1))) ; // wait voltage settling
-	}
-
-	if (!(cbcdr & CCM_CBCDR_PERIPH_CLK_SEL(1))) {
-		printf_debug("need to switch to alternate clock during reconfigure of ARM PLL\n");
-		const uint32_t need1s =
-		  CCM_ANALOG_PLL_USB1_ENABLE(1) |
-		  CCM_ANALOG_PLL_USB1_POWER(1) |
-		  CCM_ANALOG_PLL_USB1_LOCK(1) |
-		  CCM_ANALOG_PLL_USB1_EN_USB_CLKS(1);
-		uint32_t sel, div;
-		if ((CCM_ANALOG->PLL_USB1 & need1s) == need1s) {
-			printf_debug("USB PLL is running, so we can use 120 MHz\n");
-			sel = 0;
-			div = 3; // divide down to 120 MHz, so IPG is ok even if IPG_PODF=0
-		} else {
-			printf_debug("USB PLL is off, use 24 MHz crystal\n");
-			sel = 1;
-			div = 0;
-		}
-		if ((cbcdr & CCM_CBCDR_PERIPH_CLK2_PODF_MASK) != CCM_CBCDR_PERIPH_CLK2_PODF(div)) {
-			// PERIPH_CLK2 divider needs to be changed
-			cbcdr &= ~CCM_CBCDR_PERIPH_CLK2_PODF_MASK;
-			cbcdr |= CCM_CBCDR_PERIPH_CLK2_PODF(div);
-			CCM->CBCDR = cbcdr;
-		}
-		if ((cbcmr & CCM_CBCMR_PERIPH_CLK2_SEL_MASK) != CCM_CBCMR_PERIPH_CLK2_SEL(sel)) {
-			// PERIPH_CLK2 source select needs to be changed
-			cbcmr &= ~CCM_CBCMR_PERIPH_CLK2_SEL_MASK;
-			cbcmr |= CCM_CBCMR_PERIPH_CLK2_SEL(sel);
-			CCM->CBCMR = cbcmr;
-			while (CCM->CDHIPR & CCM_CDHIPR_PERIPH2_CLK_SEL_BUSY(1)) ; // wait
-		}
-		// switch over to PERIPH_CLK2
-		cbcdr |= CCM_CBCDR_PERIPH_CLK_SEL(1);
-		CCM->CBCDR = cbcdr;
-		while (CCM->CDHIPR & CCM_CDHIPR_PERIPH_CLK_SEL_BUSY(1)) ; // wait
-	} else {
-		printf_debug("already running from PERIPH_CLK2, safe to mess with ARM PLL\n");
-	}
-
-	// TODO: check if PLL2 running, can 352, 396 or 528 can work? (no need for ARM PLL)
-
-	// DIV_SELECT: 54-108 = official range 648 to 1296 in 12 MHz steps
-	uint32_t div_arm = 1;
-	uint32_t div_ahb = 1;
-	while (frequency * div_arm * div_ahb < 648000000) {
-		if (div_arm < 8) {
-			div_arm = div_arm + 1;
-		} else {
-			if (div_ahb < 5) {
-				div_ahb = div_ahb + 1;
-				div_arm = 1;
-			} else {
-				break;
-			}
-		}
-	}
-	uint32_t mult = (frequency * div_arm * div_ahb + 6000000) / 12000000;
-	if (mult > 108) mult = 108;
-	if (mult < 54) mult = 54;
-	printf_debug("Freq: 12 MHz * %u / %u / %u\n", mult, div_arm, div_ahb);
-	frequency = mult * 12000000 / div_arm / div_ahb;
-
-	printf_debug("ARM PLL=%x\n", CCM_ANALOG->PLL_ARM);
-	const uint32_t arm_pll_mask =
-	  CCM_ANALOG_PLL_ARM_LOCK(1) |
-	  CCM_ANALOG_PLL_ARM_BYPASS(1) |
-	  CCM_ANALOG_PLL_ARM_ENABLE(1) |
-	  CCM_ANALOG_PLL_ARM_POWERDOWN(1) |
-	  CCM_ANALOG_PLL_ARM_DIV_SELECT_MASK;
-	if ((CCM_ANALOG->PLL_ARM & arm_pll_mask) != (CCM_ANALOG_PLL_ARM_LOCK(1)
-						     | CCM_ANALOG_PLL_ARM_ENABLE(1)
-						     | CCM_ANALOG_PLL_ARM_DIV_SELECT(mult))) {
-		printf_debug("ARM PLL needs reconfigure\n");
-		CCM_ANALOG->PLL_ARM = CCM_ANALOG_PLL_ARM_POWERDOWN(1);
-		// TODO: delay needed?
-		CCM_ANALOG->PLL_ARM = CCM_ANALOG_PLL_ARM_ENABLE(1)
-			| CCM_ANALOG_PLL_ARM_DIV_SELECT(mult);
-		while (!(CCM_ANALOG->PLL_ARM & CCM_ANALOG_PLL_ARM_LOCK(1))) ; // wait for lock
-		printf_debug("ARM PLL=%x\n", CCM_ANALOG->PLL_ARM);
-	} else {
-		printf_debug("ARM PLL already running at required frequency\n");
-	}
-
-	if ((CCM->CACRR & CCM_CACRR_ARM_PODF_MASK) != (div_arm - 1)) {
-		CCM->CACRR = CCM_CACRR_ARM_PODF(div_arm - 1);
-		while (CCM->CDHIPR & CCM_CDHIPR_ARM_PODF_BUSY(1)) ; // wait
-	}
-
-	if ((cbcdr & CCM_CBCDR_AHB_PODF_MASK) != CCM_CBCDR_AHB_PODF(div_ahb - 1)) {
-		cbcdr &= ~CCM_CBCDR_AHB_PODF_MASK;
-		cbcdr |= CCM_CBCDR_AHB_PODF(div_ahb - 1);
-		CCM->CBCDR = cbcdr;
-		while (CCM->CDHIPR & CCM_CDHIPR_AHB_PODF_BUSY(1)); // wait
-	}
-
-	uint32_t div_ipg = (frequency + 149999999) / 150000000;
-	if (div_ipg > 4) div_ipg = 4;
-	if ((cbcdr & CCM_CBCDR_IPG_PODF_MASK) != (CCM_CBCDR_IPG_PODF(div_ipg - 1))) {
-		cbcdr &= ~CCM_CBCDR_IPG_PODF_MASK;
-		cbcdr |= CCM_CBCDR_IPG_PODF(div_ipg - 1);
-		// TODO: how to safely change IPG_PODF ??
-		CCM->CBCDR = cbcdr;
-	}
-
-	//cbcdr &= ~CCM_CBCDR_PERIPH_CLK_SEL;
-	//CCM_CBCDR = cbcdr;  // why does this not work at 24 MHz?
-	CCM->CBCDR &= ~CCM_CBCDR_PERIPH_CLK_SEL(1);
-	while (CCM->CDHIPR & CCM_CDHIPR_PERIPH_CLK_SEL_BUSY(1)) ; // wait
-
-	//F_CPU_ACTUAL = frequency;
-	//F_BUS_ACTUAL = frequency / div_ipg;
-	//scale_cpu_cycles_to_microseconds = 0xFFFFFFFFu / (uint32_t)(frequency / 1000000u);
-
-	printf_debug("New Frequency: ARM=%u, IPG=%u\n", frequency, frequency / div_ipg);
-
-	// if voltage needs to decrease, do it after switch clock speed
-	if ((dcdc & DCDC_REG3_TRG_MASK) > DCDC_REG3_TRG((voltage - 800) / 25)) {
-		printf_debug("Decreasing voltage to %u mV\n", voltage);
-		dcdc &= ~DCDC_REG3_TRG_MASK;
-		dcdc |= DCDC_REG3_TRG((voltage - 800) / 25);
-		DCDC->REG3 = dcdc;
-		while (!(DCDC->REG0 & DCDC_REG0_STS_DC_OK(1))) ; // wait voltage settling
-	}
-
-	return frequency;
-}
-
-void reset_PFD(void) {
-  //Reset PLL2 PFDs, set default frequencies:
-  CCM_ANALOG->PFD_528_SET = (1 << 31) | (1 << 23) | (1 << 15) | (1 << 7);
-  CCM_ANALOG->PFD_528 = 0x2018101B; // PFD0:352, PFD1:594, PFD2:396, PFD3:297 MHz 	
-  //PLL3:
-  CCM_ANALOG->PFD_480_SET = (1 << 31) | (1 << 23) | (1 << 15) | (1 << 7);	
-  CCM_ANALOG->PFD_480 = 0x13110D0C; // PFD0:720, PFD1:664, PFD2:508, PFD3:454 MHz
 }
 
 #define NVIC_NUM_INTERRUPTS 160
@@ -733,7 +518,6 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
   GPIO7->DR_CLEAR = (1 << 3); //digitalWrite(13, LOW);
 
   //if ( F_CPU_ACTUAL >= 600000000 )
-    set_arm_clock(300000000);
 
   while (1)
   {
@@ -746,116 +530,41 @@ void HardFault_HandlerC(unsigned int *hardfault_args)
   }
 }
 
-extern uint32_t __main_stack_end__;
-extern uint32_t __process_stack_end__;
-
-/**
- * @brief   MIMXRT1062 clock initialization.
- * @note    All the involved constants come from the file @p board.h.
- * @note    This function is meant to be invoked early during the system
- *          initialization, it is usually invoked from the file
- *          @p board.c.
- * @note    This is based on https://github.com/PaulStoffregen/cores/blob/master/teensy4/startup.c
- *
- * @special
- */
-void MIMXRT1062_clock_init(void) {
-  //unsigned int i;
-
-#if 0
-	for (int c = 0; c < 1; c++) {
-	  GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
-	  delay(600000000); // 1s
-	  GPIO7->DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
-	  delay(600000000); // 1s
-	}
-#endif
-  
-  
-	PMU->MISC0_SET = 1<<3; //Use bandgap-based bias currents for best performance (Page 1175)
-
-	// pin 13 - if startup crashes, use this to turn on the LED early for troubleshooting
-	IOMUXC->SW_MUX_CTL_PAD[kIOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03] = 5;
-	IOMUXC->SW_PAD_CTL_PAD[kIOMUXC_SW_PAD_CTL_PAD_GPIO_B0_03] = IOMUXC_SW_PAD_CTL_PAD_DSE(7);
-	IOMUXC_GPR->GPR27 = 0xFFFFFFFF;
-	GPIO7->GDIR |= (1<<3);
-	GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
-}
-
 // In ChibiOS, memory set up happens after the clock initialization:
 // https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L256
 
 // In ChibiOS, the FPU is enabled conditionally at
 // https://github.com/ChibiOS/ChibiOS/blob/19a236b0de2c1f97ce9b82ac29675c80fa629778/os/common/startup/ARMCMx/compilers/GCC/crt0_v7m.S#L209
 
+uint32_t SystemCoreClock = 528000000UL; // default system clock
+  
 void MIMXRT1062_late_init(void) {
-	// teensy4/startup.c copies the vector table into RAM here.
-	// We don’t need that, as we don’t modify the vector table at runtime.
+  // TODO: do we only want the clock enable from BOARD_InitPins(), or also the
+  // GPIO mux definitions?
+  CLOCK_EnableClock(kCLOCK_Iomuxc);
 
-	reset_PFD();
+  BOARD_InitBootClocks();
+  //SystemCoreClockUpdate();
 
-	// Configure clocks
-	// TODO: make sure all affected peripherals are turned off!
-	// PIT & GPT timers to run from 24 MHz clock (independent of CPU speed)
-	CCM->CSCMR1 = (CCM->CSCMR1 & ~CCM_CSCMR1_PERCLK_PODF(0x3F)) | CCM_CSCMR1_PERCLK_CLK_SEL_MASK;
-	// UARTs run from 24 MHz clock (works if PLL3 off or bypassed)
-	CCM->CSCDR1 = (CCM->CSCDR1 & ~CCM_CSCDR1_UART_CLK_PODF(0x3F)) | CCM_CSCDR1_UART_CLK_SEL_MASK;
+  // TODO: turn on power LED
+  
+  printf_debug_init();
+  printf_debug("\n***********IMXRT Chibi Startup**********\n");
+  printf_debug("test %d %d %d\n", 1, -1234567, 3);
 
-#if 1 // GPIO does not work without this:
-	// Use fast GPIO6, GPIO7, GPIO8, GPIO9
-	IOMUXC_GPR->GPR26 = 0xFFFFFFFF;
-	IOMUXC_GPR->GPR27 = 0xFFFFFFFF;
-	IOMUXC_GPR->GPR28 = 0xFFFFFFFF;
-	IOMUXC_GPR->GPR29 = 0xFFFFFFFF;
-#endif
+  // Explicitly warn for a few issues I ran into, to catch possible
+  // problems automatically when working on startup code:
+  if (SCB->VTOR != (uint32_t)&_vectors) {
+    printf_debug("WARNING: unexpected SCB->VTOR value %x, expected &_vectors = %x\n", SCB->VTOR, (uint32_t)&_vectors);
+  }
+  if ((uint32_t)&_vectors % 4 != 0) {
+    printf_debug("WARNING: &_vectors = %x is unexpectedly not aligned by 4\n", (uint32_t)&_vectors);
+  }
+  if (CORTEX_NUM_VECTORS != 160) {
+    printf_debug("WARNING: unexpected CORTEX_NUM_VECTORS = %d, want %d", CORTEX_NUM_VECTORS, 160);
+  }
 	
-	printf_debug_init();
-	printf_debug("\n***********IMXRT Chibi Startup**********\n");
-	printf_debug("test %d %d %d\n", 1, -1234567, 3);
-
-	// Explicitly warn for a few issues I ran into, to catch possible
-	// problems automatically when working on startup code:
-	if (SCB->VTOR != (uint32_t)&_vectors) {
-	  printf_debug("WARNING: unexpected SCB->VTOR value %x, expected &_vectors = %x\n", SCB->VTOR, (uint32_t)&_vectors);
-	}
-	if ((uint32_t)&_vectors % 4 != 0) {
-	  printf_debug("WARNING: &_vectors = %x is unexpectedly not aligned by 4\n", (uint32_t)&_vectors);
-	}
-	if (CORTEX_NUM_VECTORS != 160) {
-	  printf_debug("WARNING: unexpected CORTEX_NUM_VECTORS = %d, want %d", CORTEX_NUM_VECTORS, 160);
-	}
-	
-	configure_cache();
-	
-	// SysTick timer is initialized in
-	// os/hal/ports/MIMXRT1062/LLD/PITv1/hal_st_lld.c
-
-#if 0
-	for (int c = 0; c < 1; c++) {
-	  GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
-	  delay(600000000); // 1s
-	  GPIO7->DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
-	  delay(600000000); // 1s
-	}
-#endif
-	
-	reset_PFD();
-	usb_pll_start();
-
-	set_arm_clock(600000000);
-
-	// TODO: why is this here?
-	asm volatile("nop\n nop\n nop\n nop": : :"memory"); // why oh why?
-
-#if 0	
-	for (int c = 0; c < 1; c++) {
-	  GPIO7->DR_SET = (1<<3); // digitalWrite(13, HIGH);
-	  delay(600000000); // 1s
-	  GPIO7->DR_CLEAR = (1<<3); // digitalWrite(13, LOW);
-	  delay(600000000); // 1s
-	}
-#endif	
-
+  configure_cache();
 }
 
 

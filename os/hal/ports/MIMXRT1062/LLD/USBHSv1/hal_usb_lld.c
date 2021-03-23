@@ -34,6 +34,13 @@
 #define printf_debug_init()
 #define printf_debug(...)
 
+#include "chprintf.h"
+#undef printf_debug
+extern void printf_debug(const char *format, ...);
+
+#include "fsl_clock.h"
+
+
 #if HAL_USE_USB || defined(__DOXYGEN__)
 
 /*===========================================================================*/
@@ -148,7 +155,7 @@ void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, s
     // buffer may start on any byte boundary; however, for optimal utilization of
     // on-chip busses it is recommended to align the buffers on a 32-byte boundary
 
-    printf_debug("    usb_transfer_schedule(endpoint=%x, transfer=%x, n=%d, primebit=%d, notify=%d)\n",
+    printf_debug("    usb_transfer_schedule(endpoint=%x, transfer=%x, n=%d, primebit=%d, notify=%d)",
 	       endpoint, t, n, primebit, notify);
     // → page 2371, “Building a transfer descriptor”
     // TODO: initialize first 7 dwords to 0
@@ -164,7 +171,7 @@ void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, s
     // → page 2373, “Executing a transfer descriptor”
 
     if (endpoint->head != NULL) {
-      printf_debug("\n  ERROR: linked list unexpectedly not empty\n\n");
+      printf_debug("\n  ERROR: linked list unexpectedly not empty\n");
       while (1) { delay(500); };
     }
 
@@ -180,7 +187,7 @@ void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, s
     // See 42.5.6.4.2.2 Data Phase
     // NXP: USB_DeviceEhciTransfer()
     if (USB1->ENDPTPRIME) {
-      printf_debug("\n  ERROR: overwriting prime bit\n\n");
+      printf_debug("\n  ERROR: overwriting prime bit\n");
     }
     USB1->ENDPTPRIME = primebit; // TODO: should this be |= instead of =?
     int primeTimesCount = 0;
@@ -192,7 +199,7 @@ void usb_transfer_schedule(endpoint_t *endpoint, transfer_t *t, uint32_t addr, s
 	USB1->ENDPTPRIME = primebit; // retry priming
       }
     }
-    printf_debug("    primeTimesCount=%d\n", primeTimesCount);
+    printf_debug("    primeTimesCount=%d", primeTimesCount);
 }
 
 static endpoint_t *epqh(usbep_t ep, int offset)
@@ -207,7 +214,7 @@ void usb_packet_transmit(USBDriver *usbp, usbep_t ep, size_t n, int notify)
   const USBEndpointConfig *epc = usbp->epc[ep];
   USBInEndpointState *isp = epc->in_state;
 
-  printf_debug("  usb_packet_transmit(n=%d)\n", n);
+  printf_debug("  usb_packet_transmit(n=%d)", n);
   //   endpoint_queue_head[1].config = (64 << 16);
   endpoint_t *endpoint = epqh(ep, QH_OFFSET_IN);
   transfer_t *t = &isp->transfer;
@@ -217,7 +224,7 @@ void usb_packet_transmit(USBDriver *usbp, usbep_t ep, size_t n, int notify)
     ep0tx->last_setup_offset = QH_OFFSET_IN;
   }
 
-  printf_debug("    txbuf=%x\n", isp->txbuf);
+  printf_debug("    txbuf=%x", isp->txbuf);
   usb_transfer_schedule(endpoint, t, (uint32_t)isp->txbuf, n, USB_ENDPTPRIME_PETB(1 << ep), notify);
 }
 
@@ -227,7 +234,7 @@ void usb_packet_receive(USBDriver *usbp, usbep_t ep, size_t n, int notify)
   const USBEndpointConfig *epc = usbp->epc[ep];
   USBOutEndpointState *osp = epc->out_state;
 
-  printf_debug("  usb_packet_receive(n=%d)\n", n);
+  printf_debug("  usb_packet_receive(n=%d)", n);
   endpoint_t *endpoint = epqh(ep, QH_OFFSET_OUT);
   transfer_t *t = &osp->transfer;
 
@@ -236,18 +243,18 @@ void usb_packet_receive(USBDriver *usbp, usbep_t ep, size_t n, int notify)
     ep0rx->last_setup_offset = QH_OFFSET_OUT;
   }
 
-  printf_debug("    rxbuf=%x\n", osp->rxbuf);
+  printf_debug("    rxbuf=%x", osp->rxbuf);
   usb_transfer_schedule(endpoint, t, (uint32_t)osp->rxbuf, n, USB_ENDPTPRIME_PERB(1 << ep), notify);
 }
 
 static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
 {
-  printf_debug("    clear_out_queue(ep=%d)\n", ep);
+  printf_debug("    clear_out_queue(ep=%d)", ep);
 
   const USBEndpointConfig *epc = usbp->epc[ep];
   endpoint_t *endpoint = epqh(ep, offset);
   transfer_t *t = endpoint->head;
-  printf_debug("    clear_out_queue, endpoint = %x (offset %d), t = %x\n", endpoint, offset, t);
+  printf_debug("    clear_out_queue, endpoint = %x (offset %d), t = %x", endpoint, offset, t);
 
   while (t) {
     // Check if transfer is still active or already completed:
@@ -256,14 +263,14 @@ static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
     const uint16_t bytes_left = (t->status & 0xFFFF0000) >> 16;
     const int active = (t->status & 0x80U);
 
-    printf_debug("      status = %d, total_bytes=%d\n",
+    printf_debug("      status = %d, total_bytes=%d",
 		 t->status,
 		 bytes_left);
 
     if (active) {
-      printf_debug("      dtd is still active!\n");
+      printf_debug("      dtd is still active!");
     } else {
-      printf_debug("      dtd completed!\n");
+      printf_debug("      dtd completed!");
     }
 
     if (endpoint->head == endpoint->tail) {
@@ -283,40 +290,40 @@ static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
     // Call event handlers and update ChibiOS USB driver state
     if (/* TODO(correctness): if ioc == 1 */ at_end_of_queue) {
       if (offset == QH_OFFSET_OUT) {
-	printf_debug("    clear_out_complete ep=%d (OUT), rxbuf=%x\n", ep, epc->out_state->rxbuf);
+	printf_debug("    clear_out_complete ep=%d (OUT), rxbuf=%x", ep, epc->out_state->rxbuf);
 	(usbp)->receiving &= ~(1 << ep);
 
 	USBOutEndpointState *osp = epc->out_state;
 	osp->rxcnt = osp->rxsize - bytes_left;
 
-	printf_debug("    received %d bytes\n", osp->rxcnt);
+	printf_debug("    received %d bytes", osp->rxcnt);
 
 	/* Endpoint Receive Complete Event */
 	/* Transfer Direction OUT */
 	if (epc->out_cb != NULL) {
-	  printf_debug("    invoking out_cb for ep %d\n", ep);
+	  printf_debug("    invoking out_cb for ep %d", ep);
 	  _usb_isr_invoke_out_cb(usbp, ep);
 	}
       }
 
       if (offset == QH_OFFSET_IN) {
-	printf_debug("    clear_out_complete ep=%d (IN), txbuf=%x\n", ep, epc->in_state->txbuf);
+	printf_debug("    clear_out_complete ep=%d (IN), txbuf=%x", ep, epc->in_state->txbuf);
 	(usbp)->transmitting &= ~(1 << ep);
 	/* Endpoint Transmit Complete Event */
 	/* Transfer Direction IN */
 	if (epc->in_cb != NULL) {
-	  printf_debug("    invoking in_cb for ep %d\n", ep);
+	  printf_debug("    invoking in_cb for ep %d", ep);
 	  _usb_isr_invoke_in_cb(usbp, ep);
 	}
       }
     } else {
-      printf_debug("\n    ERROR: not at end of linked list\n\n");
+      printf_debug("\n    ERROR: not at end of linked list\n");
     }
 
     t->status = 0;
     t = next;
     if (t != NULL) {
-      printf_debug("\n   ERROR: more than 1 queue entry!\n\n");
+      printf_debug("\n   ERROR: more than 1 queue entry!\n");
     }
 
     // TODO: this is where we would need to prime descriptors if we had a queue
@@ -334,7 +341,7 @@ static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
 
 static void cancel_control_pipe(USBDriver *usbp, usbep_t ep, int offset)
 {
-  printf_debug("    cancel_control_pipe(ep=%d, offset=%d)\n", ep, offset);
+  printf_debug("    cancel_control_pipe(ep=%d, offset=%d)", ep, offset);
 
   endpoint_t *endpoint = epqh(ep, offset);
   transfer_t *currentDtd = endpoint->head;
@@ -390,7 +397,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB0_IRQ_VECTOR) {
 
   // → page 2375, “Servicing Interrupts”
   if (status & USB_USBSTS_UI_MASK /* token done */) {
-    printf_debug("\ntokendone\n");
+    printf_debug("\ntokendone");
     // Execution Order 1a: check ENDPTSETUPSTAT
     uint32_t setupstat = USB1->ENDPTSETUPSTAT;
     while (setupstat) {
@@ -398,7 +405,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB0_IRQ_VECTOR) {
 	const USBEndpointConfig *epc = usbp->epc[ep];
 
 	if (setupstat & USB_ENDPTSETUPSTAT_ENDPTSETUPSTAT(1 << ep)) {
-	  printf_debug("  setup ep=%d\n", ep);
+	  printf_debug("  setup ep=%d", ep);
 
 	  // The NXP stack cancels the data/status phase transfers,
 	  // presumably because they can safely be discarderd
@@ -436,41 +443,41 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB0_IRQ_VECTOR) {
 
       for (uint8_t ep = 0; ep < MIMXRT1062_USB_ENDPOINTS; ep++) {
 	if (complete & USB_ENDPTCOMPLETE_ERCE(1 << ep)) { // bit 0 to 16
-	  printf_debug("  complete ep=%d (OUT)\n", ep);
+	  printf_debug("  complete ep=%d (OUT)", ep);
 	  clear_out_queue(usbp, ep, QH_OFFSET_OUT);
 	}
 
 	if (complete & USB_ENDPTCOMPLETE_ETCE(1 << ep)) { // bit 16 and higher
-	  printf_debug("  complete ep=%d (IN)\n", ep);
+	  printf_debug("  complete ep=%d (IN)", ep);
 	  clear_out_queue(usbp, ep, QH_OFFSET_IN);
 	}
       }
     }
-    printf_debug("tokendone done\n\n");
+    printf_debug("tokendone done\n");
   }
 
   if (status & USB_USBSTS_URI_MASK) {
-    printf_debug("  USB reset interrupt\n");
+    printf_debug("  USB reset interrupt");
     _usb_reset(usbp);
   }
 
   if (status & USB_USBSTS_PCI_MASK) {
-    printf_debug("  Port Change Interrupt\n");
+    printf_debug("  Port Change Interrupt");
     if (!(USB1->PORTSC1 & USB_PORTSC1_PR_MASK)) {
       if (USB1->PORTSC1 & USB_PORTSC1_HSP_MASK) {
-	printf_debug("    USB High Speed :)\n");
+	printf_debug("    USB High Speed :)");
       } else {
-	printf_debug("    USB Full Speed :(\n");
+	printf_debug("    USB Full Speed :(");
       }
     }
   }
 
   if (status & USB_USBSTS_UEI_MASK) {
-    printf_debug("  USB Error Interrupt\n");
+    printf_debug("  USB Error Interrupt");
   }
 
   if (status & USB_USBSTS_SLI_MASK) {
-    printf_debug("  USB Suspend Interrupt\n");
+    printf_debug("  USB Suspend Interrupt");
   }
 
   if (status & USB_USBSTS_SRI_MASK) {
@@ -497,8 +504,6 @@ void usb_lld_init(void) {
   /* Driver initialization.*/
   usbObjectInit(&USBD1);
 
-  printf_debug("usb_lld_init()\n");
-
 #if MIMXRT1062_USB_USE_USB1
 
 #endif /* MIMXRT1062_USB_USE_USB1 */
@@ -519,7 +524,7 @@ static inline void attachInterruptVector(int irq, void (*function)(void)) { _Vec
  */
 void usb_lld_start(USBDriver *usbp) {
   if (usbp->state != USB_STOP) {
-      printf_debug("already started!\n");
+      printf_debug("already started!");
     return; // already started
   }
 
@@ -528,8 +533,31 @@ void usb_lld_start(USBDriver *usbp) {
     return; // unknown usbp
   }
 
-  printf_debug("  usb_lld_start() enter\n");
+  printf_debug("  usb_lld_start() enter");
 
+#if 1 /* NXP_EXTRA_CLOCKS */
+  /* USB PHY configuration */
+#ifndef BOARD_USB_PHY_D_CAL
+#define BOARD_USB_PHY_D_CAL (0x0CU)
+#endif
+#ifndef BOARD_USB_PHY_TXCAL45DP
+#define BOARD_USB_PHY_TXCAL45DP (0x06U)
+#endif
+#ifndef BOARD_USB_PHY_TXCAL45DM
+#define BOARD_USB_PHY_TXCAL45DM (0x06U)
+#endif
+  /* usb_phy_config_struct_t phyConfig = { */
+  /*   BOARD_USB_PHY_D_CAL, BOARD_USB_PHY_TXCAL45DP, BOARD_USB_PHY_TXCAL45DM, */
+  /* }; */
+  uint32_t notUsed = 0;
+
+  CLOCK_EnableUsbhs0PhyPllClock(kCLOCK_Usbphy480M, 480000000U);
+  CLOCK_EnableUsbhs0Clock(kCLOCK_Usb480M, 480000000U);
+
+  //USB_EhciPhyInit(USB_DEVICE_CONTROLLER_ID, notUsed, &phyConfig);
+
+#endif
+  
 #if 1 /* PJRC_CLOCKS */
   PMU->REG_3P0 = PMU_REG_3P0_OUTPUT_TRG(0x0F) |
     PMU_REG_3P0_BO_OFFSET(6) |
@@ -540,11 +568,8 @@ void usb_lld_start(USBDriver *usbp) {
   // assume PLL3 is already running - already done by usb_pll_start() in hal_lld.c
   CCM->CCGR6 |= CCM_CCGR6_CG0(1) /* usboh3 clock */;
 
-  printf_debug("BURSTSIZE=%08lX\n", USB1->BURSTSIZE);
   //USB1_BURSTSIZE = USB_BURSTSIZE_TXPBURST(4) | USB_BURSTSIZE_RXPBURST(4);
   USB1->BURSTSIZE = 0x0404;
-  printf_debug("BURSTSIZE=%08lX\n", USB1->BURSTSIZE);
-  printf_debug("USB1_TXFILLTUNING=%08lX\n", USB1->TXFILLTUNING);
 #endif
 
 #if 1 /* PJRC_RESET */
@@ -567,7 +592,7 @@ void usb_lld_start(USBDriver *usbp) {
     
     USBPHY1->CTRL_CLR = USBPHY_CTRL_SFTRST(1); // reset PHY
 
-    printf_debug("USB reset took %d loops\n", count);
+    printf_debug("USB reset took %d loops", count);
     delay(25);
   }
 #endif
@@ -616,7 +641,7 @@ void usb_lld_start(USBDriver *usbp) {
   // Set Run/Stop bit to Run Mode:
   USB1->USBCMD = USB_USBCMD_RS(1 /* 0b1 = run */);
 
-  printf_debug("usb_lld_start() exit\n");
+  printf_debug("usb_lld_start() exit");
 
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
@@ -633,7 +658,7 @@ void usb_lld_stop(USBDriver *usbp) {
   if (usbp->state == USB_STOP) {
 #if MIMXRT1062_USB_USE_USB1
     if (&USBD1 == usbp) {
-      printf_debug("usb_lld_stop()\n");
+      printf_debug("usb_lld_stop()");
       nvicDisableVector(USB_OTG1_IRQn);
     }
 #endif /* MIMXRT1062_USB_USE_USB1 */
@@ -652,7 +677,7 @@ void usb_lld_reset(USBDriver *usbp) {
   //_usbbn = 0;
 
 #if MIMXRT1062_USB_USE_USB1
-      printf_debug("usb_lld_reset()\n");
+      printf_debug("usb_lld_reset()");
       usbp->epc[0] = &ep0config;
 
       // → page 2354, 42.5.6.2.1, “Bus Reset”
@@ -697,7 +722,7 @@ void usb_lld_reset(USBDriver *usbp) {
 void usb_lld_set_address(USBDriver *usbp) {
 
 #if MIMXRT1062_USB_USE_USB1
-  printf_debug("usb_lld_set_address(%d)\n", usbp->address);
+  printf_debug("usb_lld_set_address(%d)", usbp->address);
 
   // → page 2417, “Device Address”
   USB1->DEVICEADDR = USB_DEVICEADDR_USBADR(usbp->address) |
@@ -717,7 +742,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
 
   if(ep > MIMXRT1062_USB_ENDPOINTS)
     return;
-  printf_debug("usb_lld_init_endpoint(ep=%d)\n", ep);
+  printf_debug("usb_lld_init_endpoint(ep=%d)", ep);
 
 #if MIMXRT1062_USB_USE_USB1
   const USBEndpointConfig *epc = usbp->epc[ep];
@@ -725,7 +750,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
   // → page 2357, 42.5.6.3.1, Endpoint Initialization
 
   if (epc->out_state == NULL && epc->in_state == NULL) {
-    printf_debug("  BUG: unknown endpoint type?!\n");
+    printf_debug("  BUG: unknown endpoint type?!");
     return;
   }
 
@@ -740,7 +765,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
     mask |= USB_ENDPTCTRL_RXE(1) |
       USB_ENDPTCTRL_RXR(1) |
       USB_ENDPTCTRL_RXT(epc->ep_mode);
-    printf_debug("  OUT endpoint (RX enable), mode=%d, maxsize=%d\n", epc->ep_mode, epc->out_maxsize);
+    printf_debug("  OUT endpoint (RX enable), mode=%d, maxsize=%d", epc->ep_mode, epc->out_maxsize);
   }
 
   if (epc->in_state != NULL) {
@@ -753,7 +778,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
     mask |= USB_ENDPTCTRL_TXE(1) |
       USB_ENDPTCTRL_TXR(1) |
       USB_ENDPTCTRL_TXT(epc->ep_mode);
-    printf_debug("  IN endpoint (TX enable), mode=%d, maxsize=%d\n", epc->ep_mode, epc->in_maxsize);
+    printf_debug("  IN endpoint (TX enable), mode=%d, maxsize=%d", epc->ep_mode, epc->in_maxsize);
   }
 
   USB1->ENDPTCTRL[ep-1] = mask;
@@ -770,7 +795,7 @@ void usb_lld_init_endpoint(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_disable_endpoints(USBDriver *usbp) {
   (void)usbp;
-  printf_debug("TODO: usb_lld_disable_endpoints()\n");
+  printf_debug("TODO: usb_lld_disable_endpoints()");
 #if MIMXRT1062_USB_USE_USB1
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
@@ -793,7 +818,7 @@ usbepstatus_t usb_lld_get_status_out(USBDriver *usbp, usbep_t ep) {
     return EP_STATUS_DISABLED;
 #if MIMXRT1062_USB_USE_USB1
   uint32_t ctrl = USB1->ENDPTCTRL[ep-1];
-  printf_debug("usb_lld_get_status_out(), ctrl=%d\n", ctrl);
+  printf_debug("usb_lld_get_status_out(), ctrl=%d", ctrl);
   if (!(ctrl & USB_ENDPTCTRL_RXE_MASK)) {
     return EP_STATUS_DISABLED;
   }
@@ -821,7 +846,7 @@ usbepstatus_t usb_lld_get_status_in(USBDriver *usbp, usbep_t ep) {
     return EP_STATUS_DISABLED;
 #if MIMXRT1062_USB_USE_USB1
   uint32_t ctrl = USB1->ENDPTCTRL[ep-1];
-  printf_debug("usb_lld_get_status_in(), ctrl=%d\n", ctrl);
+  printf_debug("usb_lld_get_status_in(), ctrl=%d", ctrl);
   if (!(ctrl & USB_ENDPTCTRL_TXE_MASK)) {
     return EP_STATUS_DISABLED;
   }
@@ -848,7 +873,7 @@ usbepstatus_t usb_lld_get_status_in(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
   /* Get the BDT entry */
-  printf_debug("usb_lld_read_setup\n");
+  printf_debug("usb_lld_read_setup");
 
   uint32_t setupstat = USB1->ENDPTSETUPSTAT;
   if (!setupstat) {
@@ -892,7 +917,7 @@ void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
   usbp->transmitting &= ~((uint16_t)((unsigned)1U << (unsigned)ep));
 #endif
 
-  printf_debug("bmRequestType = %x, bRequest = %x, wValue = %x, wIndex = %x, wLength = %x\n",
+  printf_debug("bmRequestType = %x, bRequest = %x, wValue = %x, wIndex = %x, wLength = %x",
 	       s.bmRequestType, s.bRequest, s.wValue, s.wIndex, s.wLength);
 
   // TODO(cleanup): more elegant way to copy the setup data to |buf|
@@ -918,7 +943,7 @@ void usb_lld_start_out(USBDriver *usbp, usbep_t ep) {
   const USBEndpointConfig *epc = usbp->epc[ep];
   USBOutEndpointState *osp = epc->out_state;
 
-  printf_debug("  usb_lld_start_out(ep=%d) (receive)\n", ep);
+  printf_debug("  usb_lld_start_out(ep=%d) (receive)", ep);
 
   if (osp->rxsize > epc->out_maxsize) {
     osp->rxsize = epc->out_maxsize;
@@ -939,11 +964,11 @@ void usb_lld_start_out(USBDriver *usbp, usbep_t ep) {
 void usb_lld_start_in(USBDriver *usbp, usbep_t ep) {
   const USBEndpointConfig *epc = usbp->epc[ep];
   USBInEndpointState *isp = epc->in_state;
-  printf_debug("  usb_lld_start_in(ep=%d) (transmit)\n", ep);
+  printf_debug("  usb_lld_start_in(ep=%d) (transmit)", ep);
 
   size_t n = isp->txsize;
   if (n > epc->in_maxsize) {
-    printf_debug("  txsize=%d EXCEEDS MAX SIZE %d\n", isp->txsize, epc->in_maxsize);
+    printf_debug("  txsize=%d EXCEEDS MAX SIZE %d", isp->txsize, epc->in_maxsize);
     // continue anyway, otherwise the device does not enumerate
     //n = epc->in_maxsize;
   }
@@ -960,7 +985,7 @@ void usb_lld_start_in(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_stall_out(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("usb_lld_stall_out(ep=%d)\n", ep);
+  printf_debug("usb_lld_stall_out(ep=%d)", ep);
 #if MIMXRT1062_USB_USE_USB1
   USB1->ENDPTCTRL[ep-1] |= USB_ENDPTCTRL_RXS(1);
 #endif /* MIMXRT1062_USB_USE_USB1 */
@@ -976,7 +1001,7 @@ void usb_lld_stall_out(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_stall_in(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("usb_lld_stall_in(ep=%d)\n", ep);
+  printf_debug("usb_lld_stall_in(ep=%d)", ep);
 
 #if MIMXRT1062_USB_USE_USB1
   USB1->ENDPTCTRL[ep-1] |= USB_ENDPTCTRL_TXS(1);
@@ -993,7 +1018,7 @@ void usb_lld_stall_in(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_clear_out(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("usb_lld_clear_out(ep=%d)\n", ep);
+  printf_debug("usb_lld_clear_out(ep=%d)", ep);
 #if MIMXRT1062_USB_USE_USB1
   USB1->ENDPTCTRL[ep-1] &= ~USB_ENDPTCTRL_RXS_MASK;
 #endif /* MIMXRT1062_USB_USE_USB1 */
@@ -1009,7 +1034,7 @@ void usb_lld_clear_out(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_clear_in(USBDriver *usbp, usbep_t ep) {
   (void)usbp;
-  printf_debug("usb_lld_clear_in(ep=%d)\n", ep);
+  printf_debug("usb_lld_clear_in(ep=%d)", ep);
 #if MIMXRT1062_USB_USE_USB1
   USB1->ENDPTCTRL[ep-1] &= ~USB_ENDPTCTRL_TXS_MASK;
 #endif /* MIMXRT1062_USB_USE_USB1 */

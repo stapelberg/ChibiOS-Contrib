@@ -204,8 +204,6 @@ const PALConfig pal_default_config =
  *          and before any other initialization.
  */
 void __early_init(void) {
-
-  MIMXRT1062_clock_init();
 }
 
 void __late_init(void) {
