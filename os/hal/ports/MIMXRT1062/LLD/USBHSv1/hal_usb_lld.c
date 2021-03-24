@@ -29,6 +29,13 @@
 
 #include "hal.h"
 
+#include "usb_device_config.h"
+#include "usb.h"
+#include "usb_device.h"
+#include "usb_device_dci.h"
+
+usb_device_handle handle;
+
 #define printf_init()
 #define printf(...)
 #define printf_debug_init()
@@ -225,7 +232,9 @@ void usb_packet_transmit(USBDriver *usbp, usbep_t ep, size_t n, int notify)
   }
 
   printf_debug("    txbuf=%x", isp->txbuf);
-  usb_transfer_schedule(endpoint, t, (uint32_t)isp->txbuf, n, USB_ENDPTPRIME_PETB(1 << ep), notify);
+  usbp->ep0_dir = USB_REQUEST_TYPE_DIR_IN;
+  USB_DeviceSendRequest(handle, 0 /* endpointAddress */, isp->txbuf, n);
+  //usb_transfer_schedule(endpoint, t, (uint32_t)isp->txbuf, n, USB_ENDPTPRIME_PETB(1 << ep), notify);
 }
 
 /* Called from locked ISR. */
@@ -244,7 +253,9 @@ void usb_packet_receive(USBDriver *usbp, usbep_t ep, size_t n, int notify)
   }
 
   printf_debug("    rxbuf=%x", osp->rxbuf);
-  usb_transfer_schedule(endpoint, t, (uint32_t)osp->rxbuf, n, USB_ENDPTPRIME_PERB(1 << ep), notify);
+  usbp->ep0_dir = USB_REQUEST_TYPE_DIR_OUT;
+  USB_DeviceRecvRequest(handle, 0 /* endpointAddress */, osp->rxbuf, n);
+  //usb_transfer_schedule(endpoint, t, (uint32_t)osp->rxbuf, n, USB_ENDPTPRIME_PERB(1 << ep), notify);
 }
 
 static void clear_out_queue(USBDriver *usbp, usbep_t ep, int offset)
@@ -390,8 +401,11 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB0_IRQ_VECTOR) {
   USBDriver *usbp = &USBD1;
   OSAL_IRQ_PROLOGUE();
 
-  //printf_debug("ISR\n");
+  printf_debug("ISR\n");
 
+  USB_DeviceEhciIsrFunction(handle);
+  
+#if 0
   uint32_t status = USB1->USBSTS;
   USB1->USBSTS = status;
 
@@ -486,7 +500,7 @@ OSAL_IRQ_HANDLER(MIMXRT1062_USB0_IRQ_VECTOR) {
   }
 
   //printf_debug("end-of-ISR\n\n");
-
+#endif
   OSAL_IRQ_EPILOGUE();
 }
 #endif /* MIMXRT1062_USB_USE_USB1 */
@@ -509,11 +523,54 @@ void usb_lld_init(void) {
 #endif /* MIMXRT1062_USB_USE_USB1 */
 }
 
-#define NVIC_NUM_INTERRUPTS 160 //CORTEX_NUM_VECTORS
-extern void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
-static inline void attachInterruptVector(int irq, void (*function)(void)) __attribute__((always_inline, unused));
-static inline void attachInterruptVector(int irq, void (*function)(void)) { _VectorsRam[irq + 16] = function; asm volatile("": : :"memory"); }
+usb_status_t usb_device_callback(usb_device_handle handle, uint32_t callbackEvent, void *eventParam) {
+  USBDriver *usbp = &USBD1;
+  printf_debug("usb_device_callback(event=%d)", callbackEvent);
 
+  switch (callbackEvent) {
+  case kUSB_DeviceEventBusReset:
+    printf_debug("  bus reset");
+
+    // Initialize the control pipes via usb_lld_reset():
+    _usb_reset(usbp);
+    break;
+
+  case kUSB_DeviceEventSetConfiguration:
+    printf_debug("  set configuration");
+
+    /* When the application receives this event, the host has sent a set
+       configuration request. The configuration value can be received from the
+       parameter eventParam. In the event, the application configuration can be
+       set. Initialize each interface in the current configuration by using zero
+       as an alternate setting. */
+    break;
+
+  case kUSB_DeviceEventSetInterface:
+    printf_debug("  set interface");
+
+/* • kUsbDeviceEventSetInterface */
+/* When the application receives this event, the host sent a set alternate setting request of an interface. */
+/* The interface and alternate setting value can be received from the parameter eventParam. The event- */
+/* Param points to a uint16_t variable. The high 8-bit is interface value and the low 8-bit is alternate */
+/* setting. In the event, the application changes the alternate setting of this interface if the new alternate */
+/* setting is not equal to the current setting. */
+/* Normally, change the steps as follows: */
+/* 1. Cancel all transfers of the current alternate setting in this interface. */
+/* 2. De-initialize all pipes of the current alternate setting in this interface. */
+/* 3. Initialize all pipes of the new alternate setting in this interface. */
+/* 4. Prime the transfers of the new setting. */
+/* For example, */
+/* uint16_t* */
+/* temp16 = (uint16_t*)eventParam; */
+/* uint8_t */
+/* interface = (uint8_t)((*temp16&0xFF00)>>0x08); */
+/* currentAlternateSetting[interface] = (uint8_t)(*temp16&0x00FF); */
+/* The device callback event work flow: */
+    break;
+  }
+  
+  return kStatus_USB_Success;
+}
 
 /**
  * @brief   Configures and activates the USB peripheral.
@@ -557,6 +614,22 @@ void usb_lld_start(USBDriver *usbp) {
   //USB_EhciPhyInit(USB_DEVICE_CONTROLLER_ID, notUsed, &phyConfig);
 
 #endif
+
+
+
+  if (USB_DeviceInit(kUSB_ControllerEhci0, usb_device_callback, &handle) != kStatus_USB_Success) {
+    printf_debug("allocating handle failed");
+    return;
+  }
+  printf_debug("handle allocated");
+
+  USB_DeviceRun(handle);
+  printf_debug("device running");
+
+  nvicEnableVector(USB_OTG1_IRQn, MIMXRT1062_USB_USB1_IRQ_PRIORITY);
+  printf_debug("interrupt enabled");
+  
+  return;
   
 #if 1 /* PJRC_CLOCKS */
   PMU->REG_3P0 = PMU_REG_3P0_OUTPUT_TRG(0x0F) |
@@ -665,6 +738,82 @@ void usb_lld_stop(USBDriver *usbp) {
   }
 }
 
+static usb_status_t device_ep0_control_callback(usb_device_handle handle,
+						usb_device_endpoint_callback_message_struct_t *message,
+						void *callbackParam) {
+  USBDriver *usbp = &USBD1;
+  printf_debug("device_ep0_control_callback");
+  if (message->isSetup) {
+    printf_debug("setup message for endpoint 0");
+    uint8_t ep = 0; // TODO: take from message->code
+    const USBEndpointConfig *epc = usbp->epc[ep];
+    // TODO: handle setup message
+    /* Clear receiving in the chibios state machine */
+    (usbp)->receiving &= ~(1 << ep);
+    (usbp)->transmitting &= ~(1 << ep);
+
+    usb_setup_struct_t *ds = (usb_setup_struct_t*)message->buffer;
+    printf_debug("native wValue = %d / wIndex = %d / wLength = %d",
+		 ds->wValue,
+		 ds->wIndex,
+		 ds->wLength);
+    printf_debug("swapped wValue = %d / wIndex = %d / wLength = %d",
+		 USB_SHORT_FROM_LITTLE_ENDIAN(ds->wValue),
+		 USB_SHORT_FROM_LITTLE_ENDIAN(ds->wIndex),
+		 USB_SHORT_FROM_LITTLE_ENDIAN(ds->wLength));
+    memcpy(usbp->setup, message->buffer, message->length);
+    
+    /* Call SETUP function (ChibiOS core), which prepares
+     * for send or receive and releases the buffer
+     */
+    if (epc->setup_cb != NULL) {
+      _usb_isr_invoke_setup_cb(usbp, ep);
+      // -> will call usb_lld_read_setup
+      // -> will call e.g. usb_lld_start_in
+    }
+    return;
+  }
+  // TODO: describe under which circumstances this callback is called. seems
+  // like there are a number of situations, e.g. transfer completion (but what
+  // about e.g. message->length == 0?)
+  printf_debug("non-setup message control callback for buffer %x, len=%d!", message->buffer, message->length);
+
+  /* if (message->length == 0) { */
+  /*   return; // no action required */
+  /* } */
+  
+  uint8_t ep = 0; // TODO
+  const USBEndpointConfig *epc = usbp->epc[ep];
+
+  if (usbp->ep0_dir == USB_REQUEST_TYPE_DIR_OUT) {
+    printf_debug("    complete, OUT ep=%d (OUT), rxbuf=%x", ep, epc->out_state->rxbuf);
+    (usbp)->receiving &= ~(1 << ep);
+
+    USBOutEndpointState *osp = epc->out_state;
+    const uint32_t bytes_left = 0; // TODO
+    osp->rxcnt = osp->rxsize - bytes_left;
+
+    printf_debug("    received %d bytes", osp->rxcnt);
+
+    /* Endpoint Receive Complete Event */
+    /* Transfer Direction OUT */
+    if (epc->out_cb != NULL) {
+      printf_debug("    invoking out_cb for ep %d", ep);
+      _usb_isr_invoke_out_cb(usbp, ep);
+    }
+  } else {
+    printf_debug("    complete, IN ep=%d (IN), txbuf=%x", ep, epc->in_state->txbuf);
+    (usbp)->transmitting &= ~(1 << ep);
+    /* Endpoint Transmit Complete Event */
+    /* Transfer Direction IN */
+    if (epc->in_cb != NULL) {
+      printf_debug("    invoking in_cb for ep %d", ep);
+      _usb_isr_invoke_in_cb(usbp, ep);
+    }
+  }
+
+}
+
 /**
  * @brief   USB low level reset routine.
  *
@@ -676,7 +825,46 @@ void usb_lld_reset(USBDriver *usbp) {
   // FIXME, dyn alloc
   //_usbbn = 0;
 
-#if MIMXRT1062_USB_USE_USB1
+  usbp->epc[0] = &ep0config;
+  
+    usb_device_endpoint_init_struct_t epInitStruct;
+    usb_device_endpoint_callback_struct_t epCallback;
+    usb_status_t status;
+
+    epCallback.callbackFn    = device_ep0_control_callback;
+    epCallback.callbackParam = NULL;
+
+    // NXP sets zlt = 1, but that makes enumeration hang when a packet with 64
+    // bytes is transmitted:
+    // https://community.nxp.com/t5/MQX-Software-Solutions/MQX-USBHS-Control-Endpoint-Zero-Length-Termination/m-p/375730
+    epInitStruct.zlt             = 0; 
+    epInitStruct.transferType    = USB_ENDPOINT_CONTROL;
+    epInitStruct.interval        = 0;
+    epInitStruct.endpointAddress = USB_CONTROL_ENDPOINT | (USB_IN << USB_DESCRIPTOR_ENDPOINT_ADDRESS_DIRECTION_SHIFT);
+    epInitStruct.maxPacketSize   = USB_CONTROL_MAX_PACKET_SIZE;
+    /* Initialize the control IN pipe */
+    status = USB_DeviceInitEndpoint(handle, &epInitStruct, &epCallback);
+
+    if (kStatus_USB_Success != status)
+    {
+      printf_debug("USB_DeviceInitEndpoint() failed: %d", status);
+      return;
+    }
+    epInitStruct.endpointAddress = USB_CONTROL_ENDPOINT | (USB_OUT << USB_DESCRIPTOR_ENDPOINT_ADDRESS_DIRECTION_SHIFT);
+    /* Initialize the control OUT pipe */
+    status = USB_DeviceInitEndpoint(handle, &epInitStruct, &epCallback);
+
+    if (kStatus_USB_Success != status)
+    {
+        (void)USB_DeviceDeinitEndpoint(
+            handle, USB_CONTROL_ENDPOINT | (USB_IN << USB_DESCRIPTOR_ENDPOINT_ADDRESS_DIRECTION_SHIFT));
+	printf_debug("USB_DeviceInitEndpoint() failed: %d", status);
+        return;
+    }
+
+    return;
+  
+#if 0 /*MIMXRT1062_USB_USE_USB1*/
       printf_debug("usb_lld_reset()");
       usbp->epc[0] = &ep0config;
 
@@ -723,6 +911,43 @@ void usb_lld_set_address(USBDriver *usbp) {
 
 #if MIMXRT1062_USB_USE_USB1
   printf_debug("usb_lld_set_address(%d)", usbp->address);
+
+  usb_status_t error = kStatus_USB_InvalidRequest;
+  uint8_t state      = 0U;
+
+  USB_DeviceGetStatus(handle, kUSB_DeviceStatusDeviceState, &state);
+
+  printf_debug("  DeviceStatusDeviceState=%x", state);
+
+  if (((uint8_t)kUSB_DeviceStateAddressing != state) && ((uint8_t)kUSB_DeviceStateAddress != state) &&
+      ((uint8_t)kUSB_DeviceStateDefault != state) && ((uint8_t)kUSB_DeviceStateConfigured != state))
+    {
+      printf_debug("  invalid state!");
+      return;
+    }
+
+  if ((uint8_t)kUSB_DeviceStateAddressing != state)
+    {
+      /* If the device address is not setting, pass the address and the device state will change to
+       * kUSB_DeviceStateAddressing internally. */
+      state = (uint8_t)(usbp->address & 0xFF);
+      error = USB_DeviceSetStatus(handle, kUSB_DeviceStatusAddress, &state);
+    }
+  else
+    {
+      /* If the device address is setting, set device address and the address will be write into the controller
+       * internally. */
+      error = USB_DeviceSetStatus(handle, kUSB_DeviceStatusAddress, NULL);
+      /* And then change the device state to kUSB_DeviceStateAddress. */
+      if (kStatus_USB_Success == error)
+        {
+	  state = (uint8_t)kUSB_DeviceStateAddress;
+	  error = USB_DeviceSetStatus(handle, kUSB_DeviceStatusDeviceState, &state);
+        }
+    }
+
+  return error;
+
 
   // → page 2417, “Device Address”
   USB1->DEVICEADDR = USB_DEVICEADDR_USBADR(usbp->address) |
@@ -873,7 +1098,8 @@ usbepstatus_t usb_lld_get_status_in(USBDriver *usbp, usbep_t ep) {
  */
 void usb_lld_read_setup(USBDriver *usbp, usbep_t ep, uint8_t *buf) {
   /* Get the BDT entry */
-  printf_debug("usb_lld_read_setup");
+  printf_debug("usb_lld_read_setup NOOP");
+  return;
 
   uint32_t setupstat = USB1->ENDPTSETUPSTAT;
   if (!setupstat) {

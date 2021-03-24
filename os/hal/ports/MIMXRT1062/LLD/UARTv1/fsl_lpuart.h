@@ -8,9 +8,6 @@
 #ifndef _FSL_LPUART_H_
 #define _FSL_LPUART_H_
 
-// TODO: move all of these into the build infrastructure
-#define CPU_MIMXRT1062DVL6A
-
 #include "fsl_common.h"
 
 /*!

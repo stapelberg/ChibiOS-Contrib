@@ -1,9 +1,6 @@
 #ifndef _CLOCK_CONFIG_H_
 #define _CLOCK_CONFIG_H_
 
-// TODO: move all of these into the build infrastructure
-#define CPU_MIMXRT1062DVL6A
-
 #include "fsl_common.h"
 
 /*******************************************************************************

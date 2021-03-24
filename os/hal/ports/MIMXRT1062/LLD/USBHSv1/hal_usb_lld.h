@@ -395,6 +395,9 @@ struct USBDriver {
    * @brief   Endpoint 0 state.
    */
   usbep0state_t                 ep0state;
+
+  uint8_t ep0_dir;
+
   /**
    * @brief   Next position in the buffer to be transferred through endpoint 0.
    */
