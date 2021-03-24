@@ -1,0 +1,3 @@
+[submodule "mcux-sdk"]
+	path = mcux-sdk
+	url = https://github.com/NXPmicro/mcux-sdk
