@@ -364,6 +364,13 @@ void MIMXRT1062_late_init(void) {
   BOARD_InitBootClocks();
   //SystemCoreClockUpdate();
 
+  // TODO: is the following covered by NXP startup code somewhere?
+  // Use fast GPIO6, GPIO7, GPIO8, GPIO9
+  IOMUXC_GPR->GPR26 = 0xFFFFFFFF;
+  IOMUXC_GPR->GPR27 = 0xFFFFFFFF;
+  IOMUXC_GPR->GPR28 = 0xFFFFFFFF;
+  IOMUXC_GPR->GPR29 = 0xFFFFFFFF;
+  
   // TODO: turn on power LED
   
   printf_debug_init();
