@@ -5,7 +5,7 @@
 
 # Compiler options here.
 ifeq ($(USE_OPT),)
-  USE_OPT = -O2 -ggdb -fomit-frame-pointer -falign-functions=16
+  USE_OPT = -O0 -ggdb -fomit-frame-pointer -falign-functions=16
 endif
 
 # C specific options here (added to USE_OPT).
@@ -78,6 +78,8 @@ endif
 # Architecture or project specific options
 ##############################################################################
 
+USE_VERBOSE_COMPILE = yes
+
 ##############################################################################
 # Project, sources and paths
 #
@@ -86,8 +88,8 @@ endif
 PROJECT = ch
 
 # Imported source files and paths
-CHIBIOS = ../../../../ChibiOS
-CHIBIOS_CONTRIB = $(CHIBIOS)/../ChibiOS-Contrib
+CHIBIOS = ../../../../chibios
+CHIBIOS_CONTRIB = $(CHIBIOS)/../chibios-contrib
 # Licensing files.
 include $(CHIBIOS)/os/license/license.mk
 # Startup files.
@@ -117,7 +119,7 @@ LDSCRIPT= $(STARTUPLD_CONTRIB)/MIMXRT1062.ld
 # setting.
 CSRC = $(ALLCSRC) \
        $(TESTSRC) \
-       main.c usbcfg.c
+       main.c usbcfg.c $(CHIBIOS)/os/various/syscalls.c
 
 # C++ sources that can be compiled in ARM or THUMB mode depending on the global
 # setting.
@@ -199,7 +201,7 @@ CPPWARN = -Wall -Wextra -Wundef
 #
 
 # List all user C define here, like -D_DEBUG=1
-UDEFS =
+UDEFS = -DCPU_MIMXRT1062DVL6A
 
 # Define ASM defines here
 UADEFS =

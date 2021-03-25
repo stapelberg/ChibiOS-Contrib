@@ -44,18 +44,28 @@ extern void printf_debug(const char *format, ...);
 
 static const ShellCommand commands[] = {{NULL, NULL}};
 
-static const ShellConfig shell_cfg1 = {(BaseSequentialStream *)&SDU1, commands};
-
-#define SHELL_WA_SIZE   THD_WORKING_AREA_SIZE(2048)
-
-static const ShellCommand commands[] = {
-  {NULL, NULL}
-};
-
 static const ShellConfig shell_cfg1 = {
   (BaseSequentialStream *)&SDU1,
   commands
 };
+
+char buf[1024];
+
+#include "fsl_lpuart.h"
+void printf_debug(const char *format, ...)
+{
+  va_list args;
+  va_start(args, format);
+  int n = chvsnprintf(buf, sizeof(buf), format, args);
+  // Directly write to serial instead of using SD4 BaseSequentialStream, because
+  // the latter does not work from within a locked section (e.g. usbStart grabs
+  // a lock).
+  buf[n] = '\r';
+  buf[n+1] = '\n';
+  buf[n+2] = '\0';
+  LPUART_WriteBlocking(LPUART1, (unsigned char*)buf, n+2);
+  va_end(args);
+}
 
 
 
@@ -71,16 +81,19 @@ int main(void) {
      *   RTOS is active.
      */
     halInit();
-
-    // This is still visible, but then the device seems to restart
-    printf_debug("halInit done\n");
-
     chSysInit();
+
+    const SerialConfig sc = {
+      .sc_speed = 115200,
+    };
+    sdStart(&SD1, &sc);
+
+    chprintf((BaseSequentialStream*)&SD1, "ChibiOS teensy 4.1 demo on the SD1 serial! updated :D\r\n");
 
     // printf_debug("chSysInit done\n");
     // printf_debug("IRQn = %d\n", MIMXRT1062_SERIAL3_IRQ_VECTOR);
 
-#define MYSERIAL &SD4
+#define MYSERIAL &SD1
     //#define MYSERIAL &SD1
 
     /*

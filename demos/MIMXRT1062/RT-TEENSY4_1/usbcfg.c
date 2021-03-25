@@ -17,6 +17,8 @@
 
 #include "hal.h"
 
+extern void printf_debug(const char *format, ...);
+
 /* Virtual serial port over USB.*/
 SerialUSBDriver SDU1;
 
@@ -196,7 +198,7 @@ static const USBDescriptor *get_descriptor(USBDriver *usbp,
                                            uint16_t lang) {
   (void)usbp;
   (void)lang;
-  printf_debug("dtype = %u, dindex=%u, lang=%lu\n",dtype,dindex,lang);
+  printf_debug("dtype = %u, dindex=%u, lang=%lu",dtype,dindex,lang);
   switch (dtype) {
   case USB_DESCRIPTOR_DEVICE:
     return &vcom_device_descriptor;
@@ -209,7 +211,7 @@ static const USBDescriptor *get_descriptor(USBDriver *usbp,
       return &vcom_strings[dindex];
   }
 
-  printf_debug("!! returning NULL descriptor !!\n");
+  printf_debug("!! returning NULL descriptor !!");
   return NULL;
 }
 
@@ -223,12 +225,17 @@ static USBInEndpointState ep1instate __attribute__ ((used, aligned(32)));
  */
 static USBOutEndpointState ep1outstate __attribute__ ((used, aligned(32)));
 
+/* void sduSetup(USBDriver *usbp, usbep_t ep) { */
+/*   printf_debug("sduSetup()"); */
+/*   _usb_ep0setup(usbp, ep); */
+/* } */
+
 /**
  * @brief   EP1 initialization structure (both IN and OUT).
  */
 static const USBEndpointConfig ep1config = {
   .ep_mode = USB_EP_MODE_TYPE_BULK,
-  .setup_cb = NULL,
+  .setup_cb = NULL, //sduSetup,
   .in_cb = sduDataTransmitted,
   .out_cb = sduDataReceived,
   .in_maxsize = 0x0200,
@@ -266,7 +273,7 @@ static const USBEndpointConfig ep2config = {
 static void usb_event(USBDriver *usbp, usbevent_t event) {
   extern SerialUSBDriver SDU1;
 
-  printf_debug("usbcfg.c:usb_event(event=%d)\n", event);
+  printf_debug("usbcfg.c:usb_event(event=%d)", event);
   switch (event) {
   case USB_EVENT_ADDRESS:
     return;
